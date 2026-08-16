@@ -9,6 +9,7 @@ import type { Context } from '../context-types.ts'
 import { t } from './locales.ts'
 import { McpSection } from './features/mcp/McpSection.tsx'
 import { SkillsSection } from './features/skills/SkillsSection.tsx'
+import { RulesSection } from './features/rules/RulesSection.tsx'
 
 /** One panel feature (a tab). */
 export interface PanelFeature {
@@ -21,4 +22,5 @@ export interface PanelFeature {
 export const FEATURES: PanelFeature[] = [
   { id: 'mcp', label: () => t('tabMcp'), Component: McpSection },
   { id: 'skills', label: () => t('tabSkills'), Component: SkillsSection },
+  { id: 'rules', label: () => t('tabRules'), Component: RulesSection },
 ]

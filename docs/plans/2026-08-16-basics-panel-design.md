@@ -1,6 +1,6 @@
 # dsh-basics-panel 设计文档
 
-> 日期：2026-08-16 · 状态：v0.1 已实现（MCP 展示/开关 + 技能展示/编辑）
+> 日期：2026-08-16 · 状态：v0.2 已实现（MCP 展示/开关 + 技能展示/编辑 + 规则查看/创建/编辑）
 
 ## 1. 目标
 
@@ -74,15 +74,41 @@ DSH Web「基础能力面板」：把 DSH 中缺失的可视化逐步补齐。�
 - frontmatter 经 `yaml` Document 往返，未知键与注释保留；`disable-model-invocation`/`user-invocable` 默认省略、非默认才落键；
 - 保存后 filesystem watcher 自动失效缓存（热刷新）。
 
-## 5. 工程
+## 5. Feature 三：规则
+
+### 数据来源
+
+镜像 `@deepseek-ai/dsh-agent-instructions` 的权威发现（`src/features/rules/scan.ts` 纯函数，可注入探测）：
+
+- 用户全局：`$DSH_HOME/AGENTS.md`（`resolveDshHome` + `dshHomeDisplay` 展示为 `~/.dsh/...`）；
+- 项目链：项目根（向上找 `.git` 标记）至 session cwd 的目录链，每目录探测候选 `AGENTS.md`/`CLAUDE.md`/`AGENTS.local.md`/`CLAUDE.local.md`。
+
+### API 语义
+
+- `rules.list`：返回分组（全局/项目）+ 每行 size/mtime/editable + `cwd`/`projectRoot`；
+- `rules.get` / `rules.save`：以 `key`（绝对路径）重解析并 `samePath` 校验在白名单内；save 带 `expectedMtime` 冲突检测 + `maxRuleBytes` 上限 + 原子写；
+- `rules.create`：作用域白名单（global 仅 `AGENTS.md`；project 写入项目根；cwd 写入工作目录）+ 文件名白名单，已存在返回 conflict，创建写入中文模板。
+
+### 安全
+
+- 客户端路径永不直接采信：读/写/建全部重新 discover 后比对；
+- 全局规则是行为约束源，创建仅允许固定文件名，杜绝任意路径写入。
+
+### 已知限制
+
+- 规则基线在会话启动时加载，保存仅对新会话生效（DSH 语义，UI 已提示）；
+- 不提供删除功能（误删全局规则风险大），后续可按需评估。
+
+## 6. 工程
 
 - 构建：`tsc`（声明，lib/types）+ `tsdown`（Host ESM `lib/index.js`；Client 双通道 CJS bundle `lib/client.js`（官方通道，id=包名）与 `lib/client-registry.js`（注册表通道，id=dsh-external/dsh-basics-panel））。
 - 客户端 bundle 遵守 purity gate：跨插件值导入被拒，react / 模块表条目 external，其余内联；CSS Modules 编译为哈希 class + 注入 `<style data-plugin>`。
 - 测试：vitest，覆盖 frontmatter、yaml 行编辑、脱敏、组合解析（纯函数 + 临时 fixture）。
 
-## 6. 后续规划
+## 7. 后续规划
 
 - 技能：新建 / 删除 / 重命名（目录操作）、排序；
+- 规则：删除（需谨慎评估）、规则生效预览（渲染后的 baseline）；
 - MCP：增改服务器表单（完整校验 + 明文凭据往返需谨慎）、连接日志、重连状态；
 - 新增可视化候选：agent preset 组合查看、设置命名空间、工具清单、后台任务、子代理拓扑；
 - 项目级 MCP：待 DSH 支持项目级组合文件后，在 `composition-scan` 增加一个来源即可。

@@ -150,6 +150,40 @@ export interface McpList {
   groups: McpGroup[]
 }
 
+export interface RuleRow {
+  key: string
+  scope: 'global' | 'project'
+  fileName: string
+  displayPath: string
+  directory: string
+  size?: number
+  mtime?: number
+  editable: boolean
+}
+
+export interface RuleGroup {
+  scope: 'global' | 'project'
+  rules: RuleRow[]
+}
+
+export interface RulesList {
+  groups: RuleGroup[]
+  cwd: string
+  projectRoot: string
+}
+
+export interface RuleDetail {
+  key: string
+  scope: 'global' | 'project'
+  fileName: string
+  displayPath: string
+  content: string
+  mtime?: number
+  editable: boolean
+}
+
+export type RuleCreateScope = 'global' | 'project' | 'cwd'
+
 // ── Typed methods ──────────────────────────────────────────────────────────
 
 function skillPayload(ref: SessionRef, extra: Record<string, unknown>): Record<string, unknown> {
@@ -174,5 +208,17 @@ export const api = {
   },
   mcpSave(path: string, rowId: string | null, serverName: string, patch: McpConfigPatch): Promise<{ ok: true }> {
     return call('mcp.save', { path, ...(rowId !== null ? { rowId } : {}), serverName, patch })
+  },
+  rulesList(ref: SessionRef): Promise<RulesList> {
+    return call('rules.list', { sessionId: ref.sessionId, ...(ref.cwd !== undefined ? { cwd: ref.cwd } : {}) })
+  },
+  rulesGet(ref: SessionRef, key: string): Promise<RuleDetail> {
+    return call('rules.get', skillPayload(ref, { key }))
+  },
+  rulesSave(ref: SessionRef, key: string, expectedMtime: number | undefined, content: string): Promise<{ ok: true; mtime?: number }> {
+    return call('rules.save', skillPayload(ref, { key, ...(expectedMtime !== undefined ? { expectedMtime } : {}), content }))
+  },
+  rulesCreate(ref: SessionRef, scope: RuleCreateScope, fileName: string): Promise<{ ok: true; key: string; scope: 'global' | 'project'; fileName: string; displayPath: string; mtime?: number }> {
+    return call('rules.create', skillPayload(ref, { scope, fileName }))
   },
 }

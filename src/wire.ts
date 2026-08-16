@@ -14,6 +14,7 @@ export type BasicsErrorCode =
   | 'method-error'
   | 'fs-error'
   | 'skill-error'
+  | 'rule-error'
   | 'mcp-error'
   | 'conflict'
   | 'read-only'

@@ -1,7 +1,7 @@
 {
   "name": "dsh-basics-panel",
   "version": "0.1.0",
-  "description": "DSH web plugin: a native Settings panel for visualizing and managing MCP servers and skills, with a modular feature registry so future visualizations slot in without touching the shell.",
+  "description": "DSH web plugin: a native Settings panel for visualizing and managing MCP servers, skills and rules, with a modular feature registry so future visualizations slot in without touching the shell.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
