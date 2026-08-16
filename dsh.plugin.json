@@ -1,0 +1,16 @@
+{
+  "id": "dsh-external/dsh-basics-panel",
+  "version": "0.1.0",
+  "main": "./lib/index.js",
+  "description": "基础能力面板：在 DSH 设置中可视化并管理 MCP 服务器与技能，采用模块化 feature 注册表便于扩展更多可视化",
+  "engines": {
+    "dsh": ">=0.0.1"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  },
+  "client": {
+    "main": "./lib/client-registry.js"
+  }
+}
