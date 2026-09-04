@@ -4,6 +4,8 @@ DSH Web 插件「基础能力面板」：在 DSH 设置中可视化并管理 **M
 
 A DSH web plugin: a native Settings panel for visualizing and managing **MCP servers**, **skills** and **rules**, built on a modular feature registry so future visualizations slot in without touching the shell.
 
+> **兼容性**：`0.2.0` 起适配 DSH `0.1.2-rc.1`。上游已移除 `@deepseek-ai/dsh-client-runtime`，其 `slots` / `sessions` / `locale` 客户端服务改由标准 web 组合提供（`ui-renderer` / `api-session-controller` / `client-locale`），本插件不再声明对该包的注入依赖，构建外部模块清单同步收敛。
+
 ## 功能
 
 - **MCP 服务器**：按作用域（用户 profile / 预设 preset）分组列出所有 MCP 服务器，展示脱敏后的配置（env / 请求头 / 密码参数 / URL 密码均打码），显示运行时状态（已连接 · N 工具 / 已启用 / 已禁用 / 未生效），并支持逐台开关（写入配置文件的 `disabled` 字段，profile 热重载、preset 新会话生效）。

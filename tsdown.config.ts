@@ -42,7 +42,7 @@ const NODE_BUILTINS = new Set([
   ...builtinModules.map(id => `node:${id}`),
 ])
 
-/** Module specifiers the web shell shares into the frozen module table (the official PLATFORM_MODULES list, plus the runtime/client exemption). */
+/** Module specifiers the web shell shares into the frozen module table (the official PLATFORM_MODULES list; `dsh-client-runtime` was removed upstream in DSH 0.1.2-alpha — its slots/sessions/locale services now come from the standard web roster: ui-renderer / api-session-controller / client-locale). */
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
@@ -50,10 +50,7 @@ const CLIENT_EXTERNALS = [
   'react-dom/client',
   'cordis',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-schema-form',
-  '@deepseek-ai/dsh-client-runtime/client',
 ]
 
 /** Wire/type layers a client bundle may inline (mirror of the official INLINE_SAFE list). */
