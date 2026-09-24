@@ -18,7 +18,15 @@ interface Snapshot {
 }
 
 /** Build the fake host context the archived feature consumes. */
-function makeCtx(options: { archived: string[]; snapshots: Snapshot[]; live?: string[]; detach?: string[]; registryInitiallyAbsent?: boolean }) {
+function makeCtx(options: {
+  archived: string[]
+  snapshots: Snapshot[]
+  loaded?: string[]
+  running?: string[]
+  agentsAbsent?: boolean
+  detach?: string[]
+  registryInitiallyAbsent?: boolean
+}) {
   // 模拟真实注册表：权威状态是一个稳定引用的对象，setState 就地替换它。
   const holder = {
     value: { initialized: true, workspaceIds: [] as string[], archivedSessionIds: [...options.archived] },
@@ -56,13 +64,23 @@ function makeCtx(options: { archived: string[]; snapshots: Snapshot[]; live?: st
           }),
         }
       }
+      if (name === 'agents') {
+        // 真机形态：装载过的会话有 Agent（status 为 idle 或 running），冷会话没有 Agent。
+        if (options.agentsAbsent === true) return undefined
+        return {
+          get: (id: string) => {
+            if (!(options.loaded ?? []).includes(id)) return undefined
+            return { status: (options.running ?? []).includes(id) ? 'running' : 'idle' }
+          },
+        }
+      }
       if (name === 'sessionPersistence') {
         return { list: async () => options.snapshots }
       }
       return undefined
     },
     sessions: {
-      get: (id: string) => ((options.live ?? []).includes(id) ? { header: { cwd: root } } : undefined),
+      get: (id: string) => ((options.loaded ?? []).includes(id) ? { header: { cwd: root } } : undefined),
     },
   } as unknown as Context
   return {
@@ -77,7 +95,9 @@ function makeCtx(options: { archived: string[]; snapshots: Snapshot[]; live?: st
 function makeApi(options: {
   archived: string[]
   snapshots: Snapshot[]
-  live?: string[]
+  loaded?: string[]
+  running?: string[]
+  agentsAbsent?: boolean
   config?: Partial<ResolvedBasicsConfig>
   registryInitiallyAbsent?: boolean
 }) {
@@ -128,16 +148,57 @@ describe('archived.list', () => {
     expect(result.listingFailed).toBe(false)
     expect(result.maxBatchIds).toBe(200)
     const stored = result.rows.find(row => row.id === 'session-1')
-    expect(stored).toMatchObject({ cwd: 'C:/proj', createdAt: 100, stored: true, live: false, deletable: true, restorable: true })
+    expect(stored).toMatchObject({ cwd: 'C:/proj', createdAt: 100, stored: true, loaded: false, running: false, deletable: true, restorable: true })
     // 悬空条目（磁盘上已无产物）同样可删：只清理归档记录。
     const ghost = result.rows.find(row => row.id === 'session-ghost')
     expect(ghost).toMatchObject({ stored: false, deletable: true })
   })
 
-  it('marks a running session as not deletable', async () => {
-    const { api } = makeApi({ archived: ['session-1'], snapshots: [], live: ['session-1'] })
+  it('separates a loaded-but-idle session from a running one', async () => {
+    const { api } = makeApi({
+      archived: ['session-idle', 'session-busy'],
+      snapshots: [{ header: { id: 'session-idle' } }, { header: { id: 'session-busy' } }],
+      loaded: ['session-idle', 'session-busy'],
+      running: ['session-busy'],
+    })
     const result = await api['archived.list']()
-    expect(result.rows[0]).toMatchObject({ live: true, stored: false, deletable: false })
+    // 装载但空闲：保留徽标，但不再拦住删除。
+    expect(result.rows.find(row => row.id === 'session-idle'))
+      .toMatchObject({ loaded: true, running: false, deletable: true })
+    // 真的在跑回合：仍然拦住删除。
+    expect(result.rows.find(row => row.id === 'session-busy'))
+      .toMatchObject({ loaded: true, running: true, deletable: false })
+  })
+
+  it('treats every session as idle when the agent registry is absent', async () => {
+    // 未挂载 dsh-agent 的部署：拿不到 Agent，就不敢只凭内存判定「运行中」。
+    const { api } = makeApi({
+      archived: ['session-1'],
+      snapshots: [{ header: { id: 'session-1' } }],
+      loaded: ['session-1'],
+      agentsAbsent: true,
+    })
+    const result = await api['archived.list']()
+    expect(result.rows[0]).toMatchObject({ loaded: true, running: false, deletable: true })
+  })
+
+  it('only counts an explicit running status as running', async () => {
+    // 上游 Agent 必带 status；这里锁住「只认 status === 'running'」的正向判定，
+    // 免得换成「status !== 'idle'」之类写法后，字段缺失也会被当成正在运行。
+    const { ctx } = makeCtx({
+      archived: ['session-1'],
+      snapshots: [{ header: { id: 'session-1' } }],
+      loaded: ['session-1'],
+    })
+    const statusless = {
+      get: (name: string) => (name === 'agents' ? { get: () => ({}) } : (ctx.get as (key: string) => unknown)(name)),
+      // 复用同一份假会话存储，只替换 Agent 注册表。
+      sessions: (ctx as unknown as { sessions: unknown }).sessions,
+    } as unknown as Context
+    const fc: FeatureContext = { ctx: statusless, resolved: resolveBasicsConfig({ sessionsRoot: root }), sessionCwdOf: () => root }
+    const api = registerArchived(fc) as unknown as { 'archived.list': () => Promise<ArchivedList> }
+    const result = await api['archived.list']()
+    expect(result.rows[0]).toMatchObject({ loaded: true, running: false, deletable: true })
   })
 
   it('does not judge deletability when the stored-session listing fails', async () => {
@@ -243,17 +304,26 @@ describe('archived.delete', () => {
     expect(result.archivedIds).toEqual([])
   })
 
-  it('skips a running session and an unarchived id', async () => {
-    const directory = await seedSession('session-live')
+  it('deletes a loaded but idle session and skips a running one', async () => {
+    const idleDirectory = await seedSession('session-idle', 8)
+    const busyDirectory = await seedSession('session-busy', 8)
     const { api } = makeApi({
-      archived: ['session-live'],
-      snapshots: [{ header: { id: 'session-live' } }],
-      live: ['session-live'],
+      archived: ['session-idle', 'session-busy'],
+      snapshots: [{ header: { id: 'session-idle' }, sizeBytes: 8 }, { header: { id: 'session-busy' }, sizeBytes: 8 }],
+      loaded: ['session-idle', 'session-busy'],
+      running: ['session-busy'],
     })
-    const live = await api['archived.delete']({ ids: ['session-live'] })
-    expect(live.changed).toEqual([])
-    expect(live.skipped[0]?.reason).toContain('正在运行')
-    expect((await stat(directory)).isDirectory()).toBe(true)
+
+    // 装载但空闲：没有驱动在动，产物可以删。
+    const idle = await api['archived.delete']({ ids: ['session-idle'] })
+    expect(idle.changed).toEqual(['session-idle'])
+    expect(idle.freedBytes).toBe(8)
+    await expect(stat(idleDirectory)).rejects.toThrow()
+
+    const busy = await api['archived.delete']({ ids: ['session-busy'] })
+    expect(busy.changed).toEqual([])
+    expect(busy.skipped[0]?.reason).toContain('正在运行')
+    expect((await stat(busyDirectory)).isDirectory()).toBe(true)
 
     const other = await api['archived.delete']({ ids: ['session-other'] })
     expect(other.changed).toEqual([])

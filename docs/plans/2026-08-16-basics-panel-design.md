@@ -121,9 +121,22 @@ Cordis 的 `ctx.get(name)`（默认严格模式）在**提供该服务的 fiber 
 
 ### API 语义
 
-- `archived.list`：归档集合 × 存储列表联表，输出 `stored/live/restorable/deletable` 等判定与合计大小；归档集合里的悬空条目也会列出（`stored=false`，可直接清理）。
+- `archived.list`：归档集合 × 存储列表联表，输出 `stored/loaded/running/restorable/deletable` 等判定与合计大小；归档集合里的悬空条目也会列出（`stored=false`，可直接清理）。
 - `archived.restore`：`workspaceRegistry` 归档集合去 id；日志与工作区槽位不动，`domain/changed` 事件让侧边栏实时复位。
 - `archived.delete`：删除会话日志目录 → 摘除工作区记账（`Workspace.detachSession`） → 清理归档记录；仅限**已归档且未运行**的会话，路径由 Host 在会话根内重新扫描校验（目录名必须等于会话 ID、必须含日志代际文件、必须在根内），单次数量受 `maxBatchIds` 限制（客户端按该上限自动分批，并合并各批结果）。
+
+### 会话「存活」的两个层级
+
+面板的行状态刻意区分两个互不等价的概念，因为它们对应完全不同的操作后果：
+
+| 字段 | 判定 | 含义 | 对删除的影响 |
+|---|---|---|---|
+| `running` | `ctx.agents.get(id)?.status === 'running'` | Agent 正在处理回合（上游 `AgentStatus` 只有 `idle`/`running`，销毁即从注册表移除） | **硬拦**：删产物会与正在进行的落盘交错 |
+| `loaded` | `ctx.sessions.get(id) !== undefined` | 会话对象仍在本次进程的内存会话表里 | 不拦，但确认条点名提示风险 |
+
+要点：**归档不卸载会话**（归档只是 `archivedSessionIds` 这层显示过滤），所以一个归档会话完全可能长期 `loaded`——典型情形是浏览器标签页还开着它。早期实现用「`loaded` 即拒绝删除」并把它标成「运行中」，既把「已装载」误报成「正在生成」（官方侧边栏用的是上面那条 `running` 判定），也让这两类会话永远删不掉；现在按上表拆分。
+
+删除 `loaded` 但空闲的会话之所以仍要提示：产物被删后该会话对象还在内存中，之后任何一次落盘（`persistBatch` 对已落盘会话走 `appendLines` → `open(path,'a')`，目录已不存在会 ENOENT；若走创建路径则 `mkdir -p` 会把目录重新建出来）都可能报错或让日志复现。
 
 ### 归档集合的写入通道（兼容策略）
 
@@ -133,7 +146,7 @@ Cordis 的 `ctx.get(name)`（默认严格模式）在**提供该服务的 fiber 
 
 ### 安全与已知限制
 
-- 删除绕过 DSH 会话存储（上游无删除 API）：运行中的会话一律拒绝，只删日志目录，不回收消息引用的附件与其它派生数据；
+- 删除绕过 DSH 会话存储（上游无删除 API）：正在运行（`running`）的会话一律拒绝；`loaded` 但空闲的会话允许删除，但确认条会点名提示「仍装载在本次进程中」；只删日志目录，不回收消息引用的附件与其它派生数据；
 - 客户端列表基线在页面加载时拉取，删除后由面板主动 `ctx.sessions.refresh()` 重拉，必要时刷新页面；
 - 侧边栏中已删除会话的行在基线重拉前可能残留（点击会 404），属预期。
 

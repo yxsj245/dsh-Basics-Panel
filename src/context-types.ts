@@ -153,9 +153,23 @@ export interface BasicsAgentPresets {
 /** An opaque agent scope key (the live Agent object doubles as its scope key). */
 export type ScopeKey = object
 
-/** The optional `ctx.agents` face: the live Agent registry; `get()` returns the Agent (its scope key). */
+/**
+ * The Agent slice this plugin reads (mirror of dsh-agent's `Agent`).
+ * `idle` means no driver is active; `running` spans the pre-step processing and
+ * the driver draining/closing/checkpointing turns. Disposal removes the Agent
+ * from its registry, so there is no third observable status.
+ */
+export interface BasicsAgent extends ScopeKey {
+  readonly status: 'idle' | 'running'
+}
+
+/**
+ * The optional `ctx.agents` face: the live Agent registry. `get()` returns the
+ * Agent — which doubles as the skill-scope key — or undefined when no Agent is
+ * attached to that session in THIS process (a merely stored session has none).
+ */
 export interface BasicsAgents {
-  get(id: string): object | undefined
+  get(id: string): BasicsAgent | undefined
 }
 
 /** One Workspace's session account (subset of dsh-workspace's `Workspace`). */

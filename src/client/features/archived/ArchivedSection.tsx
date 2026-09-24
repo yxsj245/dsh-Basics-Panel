@@ -8,6 +8,10 @@
  * there; the host contributes the storage facts. Every destructive action goes
  * through an inline confirmation that names the count, and the host re-checks
  * each id (archived, not running, artifact found) before touching the disk.
+ * A row carries two independent liveness flags: `running` (an Agent is draining
+ * turns — deletion is blocked) and `loaded` (the session object merely sits in
+ * this process's memory, which archiving never unloads — deletion is allowed
+ * behind an explicit warning).
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { Context } from '../../../context-types.ts'
@@ -163,6 +167,10 @@ export function ArchivedSection(props: { ctx: Context }) {
 
   const list = data as ArchivedList
   const disabled = busy || list.readOnly || !list.writable
+  // 确认框里点名「仍装载在本次进程中」的目标：归档不会卸载会话，删除这类会话后
+  // 如果客户端还持有它，之后的写盘可能报错或把日志重新建出来。
+  const pendingIds = new Set(pending?.ids ?? [])
+  const pendingLoadedCount = rows.filter(row => pendingIds.has(row.id) && row.loaded && !row.running).length
 
   return (
     <>
@@ -233,6 +241,9 @@ export function ArchivedSection(props: { ctx: Context }) {
               : t('archivedConfirmRestore', { count: pending.ids.length })}
           </span>
           {pending.kind === 'delete' && <span className={css.note}>{t('archivedNote')}</span>}
+          {pending.kind === 'delete' && pendingLoadedCount > 0 && (
+            <span className={css.note}>{t('archivedLoadedWarning', { count: pendingLoadedCount })}</span>
+          )}
           <div className={css.editorActions}>
             <button type="button" className={css.button} disabled={busy} onClick={() => { setPending(null) }}>
               {t('archivedCancel')}
@@ -303,7 +314,8 @@ function ArchivedRowItem(props: {
         {row.cwd !== undefined && <span className={`${css.desc} ${css.mono}`}>{row.cwd}</span>}
         {facts.length > 0 && <span className={css.desc}>{facts.join(' · ')}</span>}
       </div>
-      {row.live && <span className={css.badge}>{t('archivedLive')}</span>}
+      {row.running && <span className={css.badge} title={t('archivedRunningHint')}>{t('archivedRunning')}</span>}
+      {!row.running && row.loaded && <span className={css.badge} title={t('archivedLoadedHint')}>{t('archivedLoaded')}</span>}
       {!row.stored && <span className={css.badge}>{t('archivedMissing')}</span>}
       <div className={css.rowActions}>
         <button

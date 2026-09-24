@@ -13,15 +13,25 @@
  *   and the accounting slot untouched;
  * - **delete** — remove the session's durable artifact directory, prune its
  *   Workspace accounting slot, then drop it from the archive set. Only
- *   archived, non-running sessions are deletable, and the filesystem work is
- *   driven by a fresh scan of the configured sessions root — never by a
- *   client-supplied path.
+ *   archived sessions that are NOT running are deletable, and the filesystem
+ *   work is driven by a fresh scan of the configured sessions root — never by
+ *   a client-supplied path.
+ *
+ * Liveness has two distinct levels, and the panel shows both:
+ * - `loaded` — `ctx.sessions.get(id)` answers, i.e. the session object sits in
+ *   this process's in-memory store. Archiving never unloads a session, so a
+ *   session that is still open in a client stays loaded indefinitely;
+ * - `running` — the session's Agent exists and its status is `running`
+ *   (dsh-agent's `AgentStatus`), i.e. a driver is actively draining turns.
+ *   This is the same predicate the harness's own session list reports.
+ * Delete blocks only on `running`: a loaded-but-idle session has no driver to
+ * race, so removing its artifacts cannot interleave with a write in flight.
  */
 import { join, relative } from 'node:path'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { FeatureContext } from '../registry.ts'
 import { BasicsError, requireStringList } from '../../wire.ts'
-import type { BasicsStoredSession } from '../../context-types.ts'
+import type { BasicsAgents, BasicsStoredSession } from '../../context-types.ts'
 import { createArchiveStore } from './archive-store.ts'
 import { findSessionArtifact, isInside, isSafeSessionId, removeSessionArtifact } from './session-artifacts.ts'
 
@@ -32,8 +42,10 @@ export interface ArchivedSessionRow {
   createdAt?: number
   sizeBytes?: number
   eventCount?: number
-  /** The session is attached to an Agent in this process. */
-  live: boolean
+  /** The session object is loaded in this process's in-memory session store. */
+  loaded: boolean
+  /** The session's Agent is draining turns right now (dsh-agent `status === 'running'`). */
+  running: boolean
   /** A durable artifact exists for the id (a dangling archive entry has none). */
   stored: boolean
   /** Whether the panel may restore this row. */
@@ -130,10 +142,34 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
     }
   }
 
+  /**
+   * The live Agent registry as it stands now. Resolved per call, never captured
+   * while this plugin applies — the same Cordis strict-`get` window that hides
+   * `workspaceRegistry` also hides `agents`.
+   */
+  const agentsOf = (): BasicsAgents | undefined => {
+    try {
+      const agents = ctx.get('agents') as BasicsAgents | undefined
+      return agents !== undefined && typeof agents.get === 'function' ? agents : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   /** Whether the session is attached to an Agent in this process. */
-  const isLive = (id: string): boolean => {
+  const isLoaded = (id: string): boolean => {
     try {
       return ctx.sessions.get(id) !== undefined
+    } catch {
+      return false
+    }
+  }
+
+  /** Whether the session's Agent is draining turns right now. */
+  const isRunning = (agents: BasicsAgents | undefined, id: string): boolean => {
+    if (agents === undefined) return false
+    try {
+      return agents.get(id)?.status === 'running'
     } catch {
       return false
     }
@@ -163,15 +199,16 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
 
   const list = async (): Promise<ArchivedList> => {
     // 服务可用性在同一份快照内只解析一次：避免 mounted / writable / rows 分别来自不同时刻而互相矛盾，
-    // 也免去每行都去解析一次注册表。
+    // 也免去每行都去解析一次注册表或 Agent 注册表。
     const archivedIds = store.ids()
     const writable = store.writable()
     const mounted = store.mounted
+    const agents = agentsOf()
     const persisted = await storedSessions()
     const rows = archivedIds.map((id): ArchivedSessionRow => {
       const snapshot = persisted?.get(id)
       const header = snapshot?.header
-      const live = isLive(id)
+      const running = isRunning(agents, id)
       const stored = snapshot !== undefined
       return {
         id,
@@ -179,11 +216,13 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
         ...(typeof header?.createdAt === 'number' ? { createdAt: header.createdAt } : {}),
         ...(typeof snapshot?.sizeBytes === 'number' ? { sizeBytes: snapshot.sizeBytes } : {}),
         ...(typeof snapshot?.eventCount === 'number' ? { eventCount: snapshot.eventCount } : {}),
-        live,
+        loaded: isLoaded(id),
+        running,
         stored,
         restorable: !resolved.readOnly && writable,
         // 悬空条目（磁盘上已无产物）同样可删——只清理归档记录；但列表整体读不到时不下判断。
-        deletable: !resolved.readOnly && resolved.allowSessionDelete && persisted !== undefined && !live,
+        // 只有「真的在跑回合」才拦住删除：装载但空闲的会话没有驱动在动，删产物不会和落盘交错。
+        deletable: !resolved.readOnly && resolved.allowSessionDelete && persisted !== undefined && !running,
       }
     })
     rows.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
@@ -225,6 +264,8 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
     const ids = requireStringList(payload, 'ids', resolved.maxBatchIds)
     const root = sessionsRoot()
     const archived = new Set(store.ids())
+    // 本批 id 共用一个 Agent 注册表快照：批内所有行都按同一时刻的运行态判断。
+    const agents = agentsOf()
     const changed: string[] = []
     const skipped: ArchivedSkip[] = []
     let freedBytes = 0
@@ -234,8 +275,8 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
         skipped.push({ id, reason: '该会话未归档，本页仅支持删除已归档会话' })
         continue
       }
-      if (isLive(id)) {
-        skipped.push({ id, reason: '该会话正在运行，请先结束会话再删除' })
+      if (isRunning(agents, id)) {
+        skipped.push({ id, reason: '该会话正在运行（Agent 状态为 running），请先结束该回合再删除' })
         continue
       }
       const artifact = await findSessionArtifact(root, id)

@@ -191,8 +191,10 @@ export interface ArchivedRow {
   createdAt?: number
   sizeBytes?: number
   eventCount?: number
-  /** The session is attached to an Agent in this process. */
-  live: boolean
+  /** The session object is loaded in this process's in-memory session store. */
+  loaded: boolean
+  /** The session's Agent is draining turns right now. */
+  running: boolean
   /** A durable artifact exists for the id. */
   stored: boolean
   restorable: boolean
