@@ -10,6 +10,7 @@ import { t } from './locales.ts'
 import { McpSection } from './features/mcp/McpSection.tsx'
 import { SkillsSection } from './features/skills/SkillsSection.tsx'
 import { RulesSection } from './features/rules/RulesSection.tsx'
+import { ArchivedSection } from './features/archived/ArchivedSection.tsx'
 
 /** One panel feature (a tab). */
 export interface PanelFeature {
@@ -23,4 +24,5 @@ export const FEATURES: PanelFeature[] = [
   { id: 'mcp', label: () => t('tabMcp'), Component: McpSection },
   { id: 'skills', label: () => t('tabSkills'), Component: SkillsSection },
   { id: 'rules', label: () => t('tabRules'), Component: RulesSection },
+  { id: 'archived', label: () => t('tabArchived'), Component: ArchivedSection },
 ]

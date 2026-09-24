@@ -13,6 +13,7 @@ import { collectApi, type HostFeature } from './features/registry.ts'
 import { registerSkills } from './features/skills/skills-service.ts'
 import { registerMcp } from './features/mcp/mcp-service.ts'
 import { registerRules } from './features/rules/rules-service.ts'
+import { registerArchived } from './features/archived/archived-service.ts'
 import type { Context, BasicsHttpRequest } from './context-types.ts'
 
 export { Config }
@@ -54,6 +55,7 @@ export function apply(ctx: Context, config?: Partial<ResolvedBasicsConfig>): voi
     { id: 'skills', register: registerSkills },
     { id: 'mcp', register: registerMcp },
     { id: 'rules', register: registerRules },
+    { id: 'archived', register: registerArchived },
   ]
   const api = collectApi(features, fc)
 

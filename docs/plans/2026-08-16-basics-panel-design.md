@@ -1,6 +1,6 @@
 # dsh-basics-panel 设计文档
 
-> 日期：2026-08-16 · 状态：v0.2 已实现（MCP 展示/开关 + 技能展示/编辑 + 规则查看/创建/编辑）
+> 日期：2026-08-16 · 状态：v0.3 已实现（MCP 展示/开关 + 技能展示/编辑 + 规则查看/创建/编辑 + 归档会话恢复/删除）
 
 ## 1. 目标
 
@@ -99,16 +99,55 @@ DSH Web「基础能力面板」：把 DSH 中缺失的可视化逐步补齐。�
 - 规则基线在会话启动时加载，保存仅对新会话生效（DSH 语义，UI 已提示）；
 - 不提供删除功能（误删全局规则风险大），后续可按需评估。
 
-## 6. 工程
+## 6. Feature 四：归档会话
+
+### 上游语义（为什么需要这个 feature）
+
+`@deepseek-ai/dsh-workspace` 的归档集合是**注册表全局的单向显示过滤器**：归档后的会话从所有分组面隐藏，但日志与工作区记账槽位都保留（便于恢复原位）。当前 DSH（0.1.5-rc.3）只暴露 `archiveSession`，没有取消归档与删除会话的接口；上游 0.1.7-rc.1 已提供 `unarchiveSession`（该 API 的引入版本未逐版核对，代码按“有则优先用”处理）。
+
+### 数据来源
+
+- 归档集合：`ctx.workspaceRegistry.archivedSessionIds`；
+- 会话事实：`ctx.sessionPersistence.list()`（header/cwd/createdAt/sizeBytes/eventCount，一次调用拿全）；
+- 运行状态：`ctx.sessions.get(id)`；
+- 标题与最近活动：不额外读日志，直接复用客户端会话列表 `ctx.sessions.list`（侧边栏同一份 Host 投影）；
+- 会话产物根：配置 `sessionsRoot`，留空取 `$DSH_HOME/sessions`。
+
+### 服务可见性（务必延迟解析）
+
+Cordis 的 `ctx.get(name)`（默认严格模式）在**提供该服务的 fiber 尚未 ACTIVE** 时返回 `undefined`（见 `@deepseek-ai/cordis` 的 `reflect.get(name, strict = true)`）。`dsh-workspace` 在发布 `workspaceRegistry` 之前要 `await` 打开工作区域域存储、恢复未完成的写入并索引会话头，而本面板的 `inject` 只声明 `webServer/webRuntime/sessions/skills/tools`，于是它恰好在这个窗口内 apply —— 此时把 `ctx.get('workspaceRegistry')` 的结果捕获进闭包，就会得到 `undefined` 并**在整个进程生命周期内固化**（症状：页签一直提示「未挂载工作区注册表」，尽管注册表几毫秒后已就绪）。
+
+因此本面板一律**在调用时刻**解析可选服务：`archive-store` 提供 `registryOf()` / `globalOf()` 两个解析函数，其余 feature 的 `ctx.get(...)` 也都写在处理函数体内，`apply()` 阶段不缓存任何服务句柄。同样不要把这些服务写进 `inject`：那会让本面板在未挂载 `dsh-workspace` 的 profile 上永不挂载，并随该 fiber 的更替反复卸载重载。
+
+### API 语义
+
+- `archived.list`：归档集合 × 存储列表联表，输出 `stored/live/restorable/deletable` 等判定与合计大小；归档集合里的悬空条目也会列出（`stored=false`，可直接清理）。
+- `archived.restore`：`workspaceRegistry` 归档集合去 id；日志与工作区槽位不动，`domain/changed` 事件让侧边栏实时复位。
+- `archived.delete`：删除会话日志目录 → 摘除工作区记账（`Workspace.detachSession`） → 清理归档记录；仅限**已归档且未运行**的会话，路径由 Host 在会话根内重新扫描校验（目录名必须等于会话 ID、必须含日志代际文件、必须在根内），单次数量受 `maxBatchIds` 限制（客户端按该上限自动分批，并合并各批结果）。
+
+### 归档集合的写入通道（兼容策略）
+
+1. `registry.unarchiveSession(id)` —— 上游公开 API，存在即优先使用（`0.1.7-rc.1` 已提供，运行中的 `0.1.5-rc.3` 尚无；引入的确切版本未逐版核对）；
+2. 否则走注册表自身的写入路径：读 `workspace` 域 global 的权威状态，构造下一份 state，经 `registry.enqueueOperation`（与注册表自身写入串行）+ `registry.setState` 提交 —— 磁盘、进程内快照与 `domain/changed` 事件三者一致；
+3. 通道都不可用（含无法写入进程内快照的版本）时**明确报错**，绝不只改磁盘：否则注册表下一次写入会把已恢复的会话又写回归档。
+
+### 安全与已知限制
+
+- 删除绕过 DSH 会话存储（上游无删除 API）：运行中的会话一律拒绝，只删日志目录，不回收消息引用的附件与其它派生数据；
+- 客户端列表基线在页面加载时拉取，删除后由面板主动 `ctx.sessions.refresh()` 重拉，必要时刷新页面；
+- 侧边栏中已删除会话的行在基线重拉前可能残留（点击会 404），属预期。
+
+## 7. 工程
 
 - 构建：`tsc`（声明，lib/types）+ `tsdown`（Host ESM `lib/index.js`；Client 双通道 CJS bundle `lib/client.js`（官方通道，id=包名）与 `lib/client-registry.js`（注册表通道，id=dsh-external/dsh-basics-panel））。
 - 客户端 bundle 遵守 purity gate：跨插件值导入被拒，react / 模块表条目 external，其余内联；CSS Modules 编译为哈希 class + 注入 `<style data-plugin>`。
-- 测试：vitest，覆盖 frontmatter、yaml 行编辑、脱敏、组合解析（纯函数 + 临时 fixture）。
+- 测试：vitest，覆盖 frontmatter、yaml 行编辑、脱敏、组合解析、会话产物定位/删除与归档集合写入（纯函数 + 临时 fixture + 假 ctx）；假 ctx 的 `get` 可切换服务可用性，用于回归「注册表在本插件 apply 之后才挂载」这一时序（见 §6 服务可见性）。
 
-## 7. 后续规划
+## 8. 后续规划
 
 - 技能：新建 / 删除 / 重命名（目录操作）、排序；
 - 规则：删除（需谨慎评估）、规则生效预览（渲染后的 baseline）；
 - MCP：增改服务器表单（完整校验 + 明文凭据往返需谨慎）、连接日志、重连状态；
+- 归档会话：附件与派生缓存的回收、导出会话日志后再删除、按工作区/时间过滤；
 - 新增可视化候选：agent preset 组合查看、设置命名空间、工具清单、后台任务、子代理拓扑；
 - 项目级 MCP：待 DSH 支持项目级组合文件后，在 `composition-scan` 增加一个来源即可。

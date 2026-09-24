@@ -444,7 +444,79 @@
   color: #fff;
 }
 
+.buttonDanger {
+  border-color: #f2a1a1;
+  color: #f2a1a1;
+}
+
+.buttonDanger:not(:disabled):hover {
+  background: #2a1a1a;
+}
+
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Archived sessions: selection rows, inline confirmation, notes. */
+.checkRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.checkRow input {
+  margin: 0;
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.archivedRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.archivedRow > input[type='checkbox'] {
+  flex: none;
+  margin: 0;
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.rowActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.confirmBar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.confirmBarDanger {
+  border-color: #f2a1a1;
+}
+
+.note {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
 }

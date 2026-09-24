@@ -16,6 +16,7 @@ export type BasicsErrorCode =
   | 'skill-error'
   | 'rule-error'
   | 'mcp-error'
+  | 'archive-error'
   | 'conflict'
   | 'read-only'
   | 'internal'
@@ -105,4 +106,38 @@ export function requireBoolean(payload: unknown, key: string): boolean {
     throw new BasicsError('bad-request', `missing or invalid "${key}"`)
   }
   return value
+}
+
+/**
+ * Narrow an unknown payload value to a non-empty list of unique non-empty
+ * strings (order preserved, duplicates dropped).
+ *
+ * The raw list length is checked BEFORE any de-duplication work, so an
+ * oversized body cannot buy a long synchronous scan; the returned list is
+ * capped by the same bound.
+ * @param payload - request payload.
+ * @param key - the array field name.
+ * @param max - maximum accepted entries (the batch cap).
+ * @returns the de-duplicated ids.
+ */
+export function requireStringList(payload: unknown, key: string, max: number): string[] {
+  const record = payload as Record<string, unknown> | null
+  const value = record?.[key]
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new BasicsError('bad-request', `缺少或非法的 "${key}" 列表`)
+  }
+  if (value.length > max) {
+    throw new BasicsError('bad-request', `"${key}" 列表超过单次上限 ${max} 项，请分批操作`)
+  }
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry === '') {
+      throw new BasicsError('bad-request', `"${key}" 列表中包含非法项`)
+    }
+    if (seen.has(entry)) continue
+    seen.add(entry)
+    ids.push(entry)
+  }
+  return ids
 }

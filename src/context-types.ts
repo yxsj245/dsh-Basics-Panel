@@ -14,6 +14,12 @@
  * - tools: @deepseek-ai/dsh-tools (ToolRuntime; `schemas()` for MCP status)
  * - loader: @deepseek-ai/cordis-plugin-loader (mounted entry tree)
  * - agentPresets: @deepseek-ai/dsh-agent-presets (optional roster)
+ * - workspaceRegistry: @deepseek-ai/dsh-workspace (WorkspaceRegistry; the
+ *   registry-global archived-session set and the Workspace rows)
+ * - sessionPersistence: @deepseek-ai/dsh-session-persistence (stored-session
+ *   listing; the archived feature reads headers, sizes, and event counts)
+ * - storageDomain: @deepseek-ai/dsh-storage-domain (the `workspace` domain's
+ *   global singleton, read for the archived feature's fallback writer)
  * - slots: the client runtime SlotRegistry
  * - locale: the client runtime locale service
  * Drift from upstream is contained to this file.
@@ -152,6 +158,59 @@ export interface BasicsAgents {
   get(id: string): object | undefined
 }
 
+/** One Workspace's session account (subset of dsh-workspace's `Workspace`). */
+export interface BasicsWorkspace {
+  readonly id: string
+  readonly sessionIds: readonly string[]
+  /** Remove a session from this workspace's durable account (idempotent). */
+  detachSession(sessionId: string): Promise<void>
+}
+
+/**
+ * The `ctx.workspaceRegistry` face this plugin uses. `archivedSessionIds` is
+ * the registry-global archive set (the durable display filter that hides a
+ * session from every grouping surface); `unarchiveSession` only exists on DSH
+ * builds that ship the upstream unarchive API, so callers must feature-detect
+ * it and fall back to the domain write path otherwise.
+ */
+export interface BasicsWorkspaceRegistry {
+  readonly archivedSessionIds: readonly string[]
+  list(): BasicsWorkspace[]
+  unarchiveSession?(sessionId: string): Promise<void>
+}
+
+/** One stored-session observation (mirror of dsh-session-persistence's snapshot). */
+export interface BasicsStoredSession {
+  readonly header: {
+    readonly id: string
+    readonly cwd?: string
+    readonly createdAt?: number
+    readonly parentSession?: string
+    readonly origin?: string
+    readonly delegationDepth?: number
+  }
+  /** Logical event count, when the backend reports it cheaply. */
+  readonly eventCount?: number
+  /** Physical artifact byte size, when the backend reports it cheaply. */
+  readonly sizeBytes?: number
+}
+
+/** The `ctx.sessionPersistence` face this plugin uses. */
+export interface BasicsSessionPersistence {
+  list(options?: { signal?: AbortSignal }): Promise<readonly BasicsStoredSession[]>
+}
+
+/** A domain global-singleton handle (mirror of dsh-storage-domain's `DomainGlobal`). */
+export interface BasicsDomainGlobal {
+  get(): unknown
+  set(value: unknown): Promise<void>
+}
+
+/** The `ctx.storageDomain` facility face: the diagnostic lookup of one open domain. */
+export interface BasicsStorageDomain {
+  get(name: string): { readonly global?: BasicsDomainGlobal } | undefined
+}
+
 /** Registration options the client passes to `ctx.slots.register` (subset). */
 export interface BasicsSlotRegisterOptions {
   name: string
@@ -187,6 +246,8 @@ export interface BasicsSessionsService {
     getSnapshot(): BasicsSessionList
     subscribe(fn: () => void): () => void
   }
+  /** Re-pull the host session-list baseline; present on the client sessions service. */
+  refresh?(): Promise<void>
 }
 
 /** The client locale service face. */
@@ -208,6 +269,12 @@ declare module 'cordis' {
     agentPresets?: BasicsAgentPresets
     /** The live agent registry (host side); resolves a session's Agent (scope key) for skill reads. */
     agents?: BasicsAgents
+    /** The workspace registry (host side); the archived-sessions feature degrades without it. */
+    workspaceRegistry?: BasicsWorkspaceRegistry
+    /** Durable session storage (host side); the archived feature lists stored sessions from it. */
+    sessionPersistence?: BasicsSessionPersistence
+    /** The storage domain facility (host side); used to read the workspace domain state. */
+    storageDomain?: BasicsStorageDomain
     /** The client slot registry (client side). */
     slots: BasicsSlotsService
     /** The client locale service (client side). */

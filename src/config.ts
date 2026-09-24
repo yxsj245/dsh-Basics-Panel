@@ -11,6 +11,8 @@ export const DEFAULT_MAX_SKILL_BYTES = 512 * 1024
 export const DEFAULT_MAX_RULE_BYTES = 1024 * 1024
 /** Default cap on one JSON request body (bytes). */
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+/** Default cap on the ids one archived-session batch may address. */
+export const DEFAULT_MAX_BATCH_IDS = 200
 
 /** The public config schema. */
 export const Config = z.object({
@@ -22,8 +24,14 @@ export const Config = z.object({
   maxBodyBytes: z.number().min(1).default(DEFAULT_MAX_BODY_BYTES),
   /** Additional absolute composition-file paths the panel may edit (deployment-managed). */
   extraMcpFiles: z.array(z.string()).default([]),
-  /** Force the whole panel read-only (no MCP toggle, no skill save, no rule edit). */
+  /** Force the whole panel read-only (no MCP toggle, no skill save, no rule edit, no archive restore/delete). */
   readOnly: z.boolean().default(false),
+  /** Upper bound on the session ids one archived-session restore/delete call may address. */
+  maxBatchIds: z.number().min(1).default(DEFAULT_MAX_BATCH_IDS),
+  /** Allow deleting archived sessions (their durable artifacts) from the panel. */
+  allowSessionDelete: z.boolean().default(true),
+  /** Durable session-artifact root; empty resolves `$DSH_HOME/sessions` (the JSONL backend's default). */
+  sessionsRoot: z.string().default(''),
 })
 
 /** The resolved config handed to `apply`. */
@@ -33,6 +41,9 @@ export interface ResolvedBasicsConfig {
   maxBodyBytes: number
   extraMcpFiles: string[]
   readOnly: boolean
+  maxBatchIds: number
+  allowSessionDelete: boolean
+  sessionsRoot: string
 }
 
 /** Normalize raw config (for direct callers that bypass the Loader schema). */
@@ -43,5 +54,8 @@ export function resolveBasicsConfig(config?: Partial<ResolvedBasicsConfig>): Res
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
     extraMcpFiles: config?.extraMcpFiles ?? [],
     readOnly: config?.readOnly ?? false,
+    maxBatchIds: config?.maxBatchIds ?? DEFAULT_MAX_BATCH_IDS,
+    allowSessionDelete: config?.allowSessionDelete ?? true,
+    sessionsRoot: config?.sessionsRoot ?? '',
   }
 }

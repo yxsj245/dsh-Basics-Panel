@@ -184,6 +184,52 @@ export interface RuleDetail {
 
 export type RuleCreateScope = 'global' | 'project' | 'cwd'
 
+/** One archived-session row. */
+export interface ArchivedRow {
+  id: string
+  cwd?: string
+  createdAt?: number
+  sizeBytes?: number
+  eventCount?: number
+  /** The session is attached to an Agent in this process. */
+  live: boolean
+  /** A durable artifact exists for the id. */
+  stored: boolean
+  restorable: boolean
+  deletable: boolean
+}
+
+/** The archived-sessions list payload. */
+export interface ArchivedList {
+  rows: ArchivedRow[]
+  archivedIds: string[]
+  totalBytes: number
+  writable: boolean
+  mounted: boolean
+  readOnly: boolean
+  deleteEnabled: boolean
+  maxBatchIds: number
+  listingFailed: boolean
+  sessionsRoot: string
+}
+
+/** One skipped id with its reason. */
+export interface ArchivedSkip {
+  id: string
+  reason: string
+}
+
+/** The restore/delete result. */
+export interface ArchivedMutation {
+  ok: true
+  changed: string[]
+  skipped: ArchivedSkip[]
+  archivedIds: string[]
+  freedBytes: number
+  staleSnapshot: boolean
+  warning?: string
+}
+
 // ── Typed methods ──────────────────────────────────────────────────────────
 
 function skillPayload(ref: SessionRef, extra: Record<string, unknown>): Record<string, unknown> {
@@ -220,5 +266,14 @@ export const api = {
   },
   rulesCreate(ref: SessionRef, scope: RuleCreateScope, fileName: string): Promise<{ ok: true; key: string; scope: 'global' | 'project'; fileName: string; displayPath: string; mtime?: number }> {
     return call('rules.create', skillPayload(ref, { scope, fileName }))
+  },
+  archivedList(): Promise<ArchivedList> {
+    return call('archived.list', {})
+  },
+  archivedRestore(ids: string[]): Promise<ArchivedMutation> {
+    return call('archived.restore', { ids })
+  },
+  archivedDelete(ids: string[]): Promise<ArchivedMutation> {
+    return call('archived.delete', { ids })
   },
 }

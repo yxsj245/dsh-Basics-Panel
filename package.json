@@ -1,7 +1,7 @@
 {
   "name": "dsh-basics-panel",
-  "version": "0.2.0",
-  "description": "DSH web plugin: a native Settings panel for visualizing and managing MCP servers, skills and rules, with a modular feature registry so future visualizations slot in without touching the shell.",
+  "version": "0.3.0",
+  "description": "DSH web plugin: a native Settings panel for visualizing and managing MCP servers, skills, rules and archived sessions, with a modular feature registry so future visualizations slot in without touching the shell.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -44,6 +44,8 @@
   ],
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsdown",
+    "sync": "node scripts/sync-profile.mjs",
+    "sync:check": "node scripts/sync-profile.mjs --check",
     "typecheck": "tsc --noEmit",
     "watch": "tsdown --watch",
     "test": "vitest run",
