@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import type { Context } from '../../../context-types.ts'
-import { api, currentSession, type SkillDetail, type SkillGroup } from '../../api.ts'
+import { api, currentSession, type SkillDetail, type SkillGroup, type SkillsList } from '../../api.ts'
 import { t } from '../../locales.ts'
 import { StatusDot, Toggle } from '../../shared.tsx'
 import css from '../../panel.module.css'
@@ -30,10 +30,19 @@ function filterLabel(scope: ScopeFilter): string {
   return scope === 'all' ? t('skillsFilterAll') : scopeLabel(scope)
 }
 
+/** Short, readable session label for the scope hint (ids are long and prefixed). */
+function shortSessionId(sessionId: string | undefined): string {
+  if (sessionId === undefined || sessionId === '') return '—'
+  const tail = sessionId.replace(/^session-/, '')
+  return tail.length <= 8 ? tail : `${tail.slice(0, 8)}…`
+}
+
 export function SkillsSection(props: { ctx: Context }) {
   const { ctx } = props
   const [groups, setGroups] = useState<SkillGroup[] | null>(null)
   const [complete, setComplete] = useState(true)
+  const [scopeSource, setScopeSource] = useState<SkillsList['scopeSource']>('session')
+  const [scopeSession, setScopeSession] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ScopeFilter>('all')
@@ -45,6 +54,8 @@ export function SkillsSection(props: { ctx: Context }) {
       .then(result => {
         setGroups(result.groups)
         setComplete(result.complete)
+        setScopeSource(result.scopeSource ?? 'session')
+        setScopeSession(result.sessionId)
       })
       .catch((caught: unknown) => {
         setError(caught instanceof Error ? caught.message : String(caught))
@@ -93,6 +104,10 @@ export function SkillsSection(props: { ctx: Context }) {
     <>
       <p className={css.intro}>{t('skillsIntro')}</p>
       {!complete && <div className={css.pill}>{t('skillsIncomplete')}</div>}
+      {scopeSource === 'fallback' && (
+        <div className={css.pill}>{t('skillsScopeFallback', { session: shortSessionId(scopeSession) })}</div>
+      )}
+      {scopeSource === 'none' && <div className={css.pill}>{t('skillsNoScope')}</div>}
       <div className={css.toolbar}>
         <input
           type="search"

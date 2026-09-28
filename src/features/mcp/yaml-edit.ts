@@ -1,10 +1,26 @@
 /**
  * Round-trip editing of a composition document: flip one row's `disabled`
- * flag while preserving comments and every other key. Editing works on the
- * yaml Document node tree (never on the plain JS value) so the file text
- * other than the one flag is byte-stable.
+ * flag or update one row's `config`, while preserving comments and every other
+ * key. Editing works on the yaml Document node tree (never on the plain JS
+ * value) so the file text other than the edited keys is byte-stable.
+ *
+ * A target names its scope: a profile row lives at the document's top level or
+ * inside an `insert` list, while a preset row lives inside the `plugins` list
+ * of an `@deepseek-ai/dsh-agent-preset` declaration (DSH ≥0.1.7 composition
+ * shape). The lookup therefore descends into preset declarations and entry
+ * groups, and never matches a row from a different scope than the target asks
+ * for — two presets may declare servers with the same name.
  */
 import { parseDocument, isMap, isSeq, isScalar, type YAMLMap } from 'yaml'
+import { isAgentPresetName, isMcpClientName } from './composition-scan.ts'
+
+/** One row to edit: its profile-scope identity plus its owning preset, if any. */
+export interface RowTarget {
+  rowId?: string | null
+  serverName: string
+  /** Owning preset id; null/absent addresses a profile-scope row. */
+  presetId?: string | null
+}
 
 /** Read a scalar node as a string (empty for non-scalars). */
 function scalarString(node: unknown): string {
@@ -13,44 +29,54 @@ function scalarString(node: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 }
 
-/** Whether a plugin module specifier names the MCP client bridge. */
-function isMcpClientName(name: string): boolean {
-  return /mcp-client/.test(name)
-}
-
-/**
- * Locate the YAML mapping of the row matching `target` (by serverName, then
- * by rowId), walking insert lists and direct rows alike.
- */
-function findRowNode(node: unknown, target: { rowId?: string | null; serverName: string }): YAMLMap | undefined {
-  if (isSeq(node)) {
-    for (const item of node.items) {
-      const found = findRowNode(item, target)
-      if (found !== undefined) return found
-    }
-    return undefined
-  }
-  if (isMap(node)) {
-    const insert = node.get('insert', true)
-    if (isSeq(insert)) {
-      for (const item of insert.items) {
-        if (!isMap(item)) continue
-        const found = considerRow(item, target)
-        if (found !== undefined) return found
-      }
-    }
-    return considerRow(node, target)
-  }
-  return undefined
-}
-
-function considerRow(map: YAMLMap, target: { rowId?: string | null; serverName: string }): YAMLMap | undefined {
+/** Whether the row at hand matches the target inside the scope being walked. */
+function considerRow(map: YAMLMap, target: RowTarget, presetId: string | null): YAMLMap | undefined {
   if (!isMcpClientName(scalarString(map.get('name', true)))) return undefined
+  if ((target.presetId ?? null) !== presetId) return undefined
   const config = map.get('config', true)
   const serverName = isMap(config) ? scalarString(config.get('serverName', true)) : ''
   if (serverName !== '' && serverName === target.serverName) return map
   if (target.rowId != null && scalarString(map.get('id', true)) === target.rowId) return map
   return undefined
+}
+
+/**
+ * Locate the YAML mapping of the row matching `target`, walking insert lists,
+ * entry-group child lists and preset declarations alike.
+ */
+function findRowNode(node: unknown, target: RowTarget, presetId: string | null): YAMLMap | undefined {
+  if (isSeq(node)) {
+    for (const item of node.items) {
+      const found = findRowNode(item, target, presetId)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (!isMap(node)) return undefined
+  const name = scalarString(node.get('name', true))
+  if (isAgentPresetName(name)) {
+    // A preset declaration: its rows live under `config.plugins`, and only a
+    // target naming this preset may reach them.
+    const config = node.get('config', true)
+    if (!isMap(config)) return undefined
+    const declared = scalarString(config.get('id', true))
+    if (declared === '' || (target.presetId ?? null) !== declared) return undefined
+    return findRowNode(config.get('plugins', true), target, declared)
+  }
+  const insert = node.get('insert', true)
+  if (isSeq(insert)) {
+    for (const item of insert.items) {
+      const found = findRowNode(item, target, presetId)
+      if (found !== undefined) return found
+    }
+  }
+  const config = node.get('config', true)
+  if (isSeq(config)) {
+    // An entry group carries its children in `config`.
+    const found = findRowNode(config, target, presetId)
+    if (found !== undefined) return found
+  }
+  return considerRow(node, target, presetId)
 }
 
 /**
@@ -61,12 +87,12 @@ function considerRow(map: YAMLMap, target: { rowId?: string | null; serverName: 
  */
 export function setRowDisabled(
   text: string,
-  target: { rowId?: string | null; serverName: string },
+  target: RowTarget,
   disabled: boolean,
 ): { ok: boolean; text: string } {
   const doc = parseDocument(text)
   if (doc.errors.length > 0) return { ok: false, text }
-  const row = findRowNode(doc.contents, target)
+  const row = findRowNode(doc.contents, target, null)
   if (row === undefined) return { ok: false, text }
   if (disabled) row.set('disabled', true)
   else row.delete('disabled')
@@ -93,12 +119,12 @@ export interface RowConfigPatch {
  */
 export function setRowConfig(
   text: string,
-  target: { rowId?: string | null; serverName: string },
+  target: RowTarget,
   patch: RowConfigPatch,
 ): { ok: boolean; text: string } {
   const doc = parseDocument(text)
   if (doc.errors.length > 0) return { ok: false, text }
-  const row = findRowNode(doc.contents, target)
+  const row = findRowNode(doc.contents, target, null)
   if (row === undefined) return { ok: false, text }
   const rawConfig: unknown = row.get('config', true)
   const config: YAMLMap = isMap(rawConfig) ? rawConfig : (doc.createNode({}) as YAMLMap)

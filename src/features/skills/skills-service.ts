@@ -6,7 +6,7 @@
  * save re-resolves the path from the registry to avoid path spoofing.
  */
 import { readFile, stat } from 'node:fs/promises'
-import type { SkillDefinition, SkillSummary, BasicsAgents } from '../../context-types.ts'
+import type { SkillDefinition, SkillSummary, BasicsAgents, BasicsAgent } from '../../context-types.ts'
 import type { FeatureContext } from '../registry.ts'
 import { BasicsError } from '../../wire.ts'
 import { requireString, optionalString } from '../../wire.ts'
@@ -15,6 +15,13 @@ import { applySkillEdit, splitSkillFile, type SkillEdit } from './frontmatter.ts
 
 /** Scope keys used by the client to group and label. */
 export type SkillScope = 'project' | 'custom' | 'user' | 'bundled' | 'runtime' | 'other'
+
+/**
+ * How the skill-view scope was resolved: the caller named a live session
+ * (`session`), the host fell back to another live Agent (`fallback`), or no
+ * live Agent exists at all (`none` — the list can then only show global skills).
+ */
+export type SkillScopeSource = 'session' | 'fallback' | 'none'
 
 /** Map a provider `source` string to a scope key. */
 export function scopeOfSource(source: string): SkillScope {
@@ -132,39 +139,75 @@ export function registerSkills(fc: FeatureContext): Record<string, (payload: unk
     return cwd === undefined ? fc.sessionCwdOf(payload) : cwd
   }
 
-  /** Resolve the viewing scope key (the live Agent) so scoped skill providers are included. */
-  const scopeOf = (payload: unknown): object | undefined => {
-    const record = payload as Record<string, unknown> | null
-    const sessionId = typeof record?.sessionId === 'string' ? record.sessionId : ''
-    if (sessionId === '') return undefined
-    const agents = ctx.get('agents') as BasicsAgents | undefined
-    if (agents === undefined || typeof agents.get !== 'function') return undefined
+  /** The most recently registered live top-level Agent (the newest open session). */
+  const lastLiveAgent = (agents: BasicsAgents): BasicsAgent | undefined => {
     try {
-      return agents.get(sessionId)
+      const roots = typeof agents.roots === 'function' ? agents.roots() : agents.list?.() ?? []
+      return roots[roots.length - 1]
     } catch {
       return undefined
     }
   }
 
+  /**
+   * Resolve the viewing scope key (the live Agent) so preset-scoped skill
+   * providers are included. DSH ≥0.1.7 mounts the filesystem skill provider
+   * inside each session preset's composition, so a read with no scope observes
+   * the global layer alone — which holds no skills at all. When the caller
+   * cannot name a live session, fall back to the newest live Agent and report
+   * that choice instead of rendering a silently empty list.
+   */
+  const resolveScope = (payload: unknown): { scope?: BasicsAgent; sessionId?: string; source: SkillScopeSource } => {
+    const record = payload as Record<string, unknown> | null
+    const sessionId = typeof record?.sessionId === 'string' ? record.sessionId : ''
+    const agents = ctx.get('agents') as BasicsAgents | undefined
+    if (agents !== undefined && typeof agents.get === 'function') {
+      if (sessionId !== '') {
+        try {
+          const agent = agents.get(sessionId)
+          if (agent !== undefined) return { scope: agent, sessionId, source: 'session' }
+        } catch {
+          // Unresolvable session → fall through to the live-agent fallback.
+        }
+      }
+      const fallback = lastLiveAgent(agents)
+      if (fallback !== undefined) {
+        return {
+          scope: fallback,
+          ...(typeof fallback.id === 'string' && fallback.id !== '' ? { sessionId: fallback.id } : {}),
+          source: 'fallback',
+        }
+      }
+    }
+    return { source: 'none' }
+  }
+
   const view = (payload: unknown): { cwd?: string; scope?: object } => {
     const cwd = cwdOf(payload)
-    const scope = scopeOf(payload)
+    const { scope } = resolveScope(payload)
     return { cwd, ...(scope !== undefined ? { scope } : {}) }
   }
 
-  const list = async (payload: unknown): Promise<{ groups: SkillGroup[]; complete: boolean }> => {
-    const snapshot = await ctx.skills.snapshot(view(payload))
+  const list = async (payload: unknown): Promise<{ groups: SkillGroup[]; complete: boolean; scopeSource: SkillScopeSource; sessionId?: string }> => {
+    const cwd = cwdOf(payload)
+    const { scope, sessionId, source } = resolveScope(payload)
+    const snapshot = await ctx.skills.snapshot({ ...(cwd !== undefined ? { cwd } : {}), ...(scope !== undefined ? { scope } : {}) })
     const groups = new Map<SkillScope, SkillRow[]>()
     for (const summary of snapshot.skills) {
-      const scope = scopeOfSource(summary.source)
-      const bucket = groups.get(scope) ?? []
+      const scopeKey = scopeOfSource(summary.source)
+      const bucket = groups.get(scopeKey) ?? []
       bucket.push(toRow(summary, resolved.readOnly))
-      groups.set(scope, bucket)
+      groups.set(scopeKey, bucket)
     }
     const ordered = SCOPE_ORDER
-      .filter(scope => groups.has(scope))
-      .map(scope => ({ scope, skills: groups.get(scope)! }))
-    return { groups: ordered, complete: snapshot.complete }
+      .filter(key => groups.has(key))
+      .map(key => ({ scope: key, skills: groups.get(key)! }))
+    return {
+      groups: ordered,
+      complete: snapshot.complete,
+      scopeSource: source,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+    }
   }
 
   const get = async (payload: unknown): Promise<SkillDetail> => {

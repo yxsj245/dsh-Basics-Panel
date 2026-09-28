@@ -136,18 +136,61 @@ export interface BasicsLoader {
   entries(): Iterable<LoaderEntry>
 }
 
-/** One agent-preset roster row (mirror of dsh-agent-presets' list()). */
+/**
+ * One agent-preset roster row (mirror of the agent-preset registry's `list()`).
+ * DSH ≤0.1.6 declared presets as directories and published `path` + `trust`;
+ * DSH ≥0.1.7 declares them as ordinary Cordis rows inside composition files,
+ * so the roster carries identity and activation state only — the composition
+ * itself is read from the Loader tree or from the declaring file (see
+ * features/mcp/preset-scan.ts).
+ */
 export interface AgentPresetRow {
   id: string
-  trust: 'system' | 'user' | string
-  path: string
+  /** Directory-based preset layout (DSH ≤0.1.6 only). */
+  trust?: 'system' | 'user' | string
+  /** Composition file of a directory-based preset (DSH ≤0.1.6 only). */
+  path?: string
   name?: string
   description?: string
+  /** Whether a session naming no preset composes this one (DSH ≥0.1.7). */
+  isDefault?: boolean
+  /** Why this preset cannot compose a session (DSH ≥0.1.7). */
+  broken?: string
+}
+
+/** One row of a preset's declaration or activated composition (mirror of the registry's inventory row). */
+export interface AgentPresetCompositionRow {
+  /** Entry id relative to the preset's Loader tree, or the declared id before activation. */
+  entryId: string | null
+  /** Module specifier the row names. */
+  moduleName: string
+  /** Effective enablement; `'conditional'` marks an unevaluated `!!js` expression. */
+  enabled: boolean | 'conditional'
+  /** The row's own `!!js` disabled expression, when it carries one. */
+  condition?: string
+  /**
+   * The row's root cordis fiber state (the numeric `FiberState` enum: 0 PENDING,
+   * 1 LOADING, 2 ACTIVE, 3 FAILED, 4 DISPOSED, 5 UNLOADING), present only when
+   * the composition is live. A declared-but-unmounted row omits it entirely.
+   */
+  fiberState?: number
+}
+
+/** One preset's roster identity beside its flattened composition. */
+export interface AgentPresetComposition {
+  id: string
+  name?: string
+  isDefault: boolean
+  /** Why this preset's rows cannot be read; absent when `rows` answers. */
+  broken?: string
+  rows: readonly AgentPresetCompositionRow[]
 }
 
 /** The optional `ctx.agentPresets` roster face. */
 export interface BasicsAgentPresets {
   list(): Promise<AgentPresetRow[]>
+  /** Declared or activated composition rows (DSH ≥0.1.7); absent on older hosts. */
+  compositionInventory?(): Promise<AgentPresetComposition[]>
 }
 
 /** An opaque agent scope key (the live Agent object doubles as its scope key). */
@@ -161,15 +204,23 @@ export type ScopeKey = object
  */
 export interface BasicsAgent extends ScopeKey {
   readonly status: 'idle' | 'running'
+  /** Shared agent/session identity (reported when this Agent backs a scope fallback). */
+  readonly id?: string
 }
 
 /**
  * The optional `ctx.agents` face: the live Agent registry. `get()` returns the
  * Agent — which doubles as the skill-scope key — or undefined when no Agent is
  * attached to that session in THIS process (a merely stored session has none).
+ * `roots()`/`list()` back the scope fallback used when the client cannot name
+ * the session it is rendering (see features/skills/skills-service.ts).
  */
 export interface BasicsAgents {
   get(id: string): BasicsAgent | undefined
+  /** Every live top-level Agent, in registration order. */
+  roots?(): BasicsAgent[]
+  /** Every live Agent, in registration order. */
+  list?(): BasicsAgent[]
 }
 
 /** One Workspace's session account (subset of dsh-workspace's `Workspace`). */
@@ -241,16 +292,26 @@ export interface BasicsSlotsService {
   inject(key: string, callback: () => () => void): () => void
 }
 
-/** One client session list row (cwd for skill scoping). */
+/** One client session list row (cwd for skill scoping, retention for "current"). */
 export interface BasicsSessionSummary {
   id: string
   cwd?: string
   displayTitle: string
+  /**
+   * Retention counters keyed by consumer source. The main conversation view
+   * retains the session it shows under `mainView`, which is how DSH ≥0.1.7
+   * spells "the current session"; older snapshots carried a `current` field
+   * instead.
+   */
+  retainedBy?: Readonly<Record<string, number>>
 }
 
 /** The client session list snapshot. */
 export interface BasicsSessionList {
-  current: string | undefined
+  /** Current session id (DSH ≤0.1.6); absent from DSH ≥0.1.7 snapshots. */
+  current?: string | undefined
+  /** Host session order (DSH ≥0.1.7). */
+  ids?: readonly string[]
   byId: Record<string, BasicsSessionSummary>
 }
 

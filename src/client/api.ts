@@ -22,10 +22,29 @@ export interface SessionRef {
   cwd?: string
 }
 
+/**
+ * Resolve the session the main view is showing.
+ *
+ * DSH ≤0.1.6 spelled this as `snapshot.current`; DSH ≥0.1.7 dropped that field
+ * and instead counts retentions per consumer source, so the session the main
+ * conversation view holds is the row carrying `retainedBy.mainView`. Without
+ * this the panel sent an empty session id, the host could not resolve a skill
+ * scope, and every skill lives in a preset-scoped layer — so the page listed
+ * nothing at all (the MCP page, which needs no session, kept working).
+ */
+function currentSessionId(snap: { current?: string | undefined; byId: Record<string, { id: string; retainedBy?: Readonly<Record<string, number>> }> }): string {
+  const legacy = snap.current
+  if (typeof legacy === 'string' && legacy !== '' && snap.byId[legacy] !== undefined) return legacy
+  for (const row of Object.values(snap.byId ?? {})) {
+    if ((row.retainedBy?.mainView ?? 0) > 0) return row.id
+  }
+  return typeof legacy === 'string' ? legacy : ''
+}
+
 /** Read the current session ref for skill scoping. */
 export function currentSession(ctx: Context): SessionRef {
   const snap = ctx.sessions.list.getSnapshot()
-  const sessionId = snap.current ?? ''
+  const sessionId = currentSessionId(snap)
   const cwd = sessionId !== '' ? snap.byId[sessionId]?.cwd : undefined
   return { sessionId, cwd }
 }
@@ -84,6 +103,10 @@ export interface SkillGroup {
 export interface SkillsList {
   groups: SkillGroup[]
   complete: boolean
+  /** How the host resolved the skill scope ('fallback' → another live session was used). */
+  scopeSource?: 'session' | 'fallback' | 'none'
+  /** The session whose scope the list reflects. */
+  sessionId?: string
 }
 
 export interface SkillDetail {
@@ -123,7 +146,8 @@ export interface McpServerRow {
   url?: string
   headers?: Record<string, string>
   toolCallTimeoutMs?: number
-  runtime: { mounted: boolean; toolCount: number }
+  /** Live status plus how it was observed ('unknown' → the host cannot tell). */
+  runtime: { mounted: boolean; toolCount: number; probe: 'global' | 'preset' | 'unknown' }
 }
 
 export interface McpGroup {
@@ -251,11 +275,11 @@ export const api = {
   mcpList(): Promise<McpList> {
     return call('mcp.list', {})
   },
-  mcpSetEnabled(path: string, rowId: string | null, serverName: string, enabled: boolean): Promise<{ ok: true; disabled: boolean; takesEffect: 'live' | 'new-session' }> {
-    return call('mcp.setEnabled', { path, ...(rowId !== null ? { rowId } : {}), serverName, enabled })
+  mcpSetEnabled(path: string, rowId: string | null, serverName: string, enabled: boolean, presetId?: string): Promise<{ ok: true; disabled: boolean; takesEffect: 'live' | 'new-session' }> {
+    return call('mcp.setEnabled', { path, ...(rowId !== null ? { rowId } : {}), ...(presetId !== undefined ? { presetId } : {}), serverName, enabled })
   },
-  mcpSave(path: string, rowId: string | null, serverName: string, patch: McpConfigPatch): Promise<{ ok: true }> {
-    return call('mcp.save', { path, ...(rowId !== null ? { rowId } : {}), serverName, patch })
+  mcpSave(path: string, rowId: string | null, serverName: string, patch: McpConfigPatch, presetId?: string): Promise<{ ok: true }> {
+    return call('mcp.save', { path, ...(rowId !== null ? { rowId } : {}), ...(presetId !== undefined ? { presetId } : {}), serverName, patch })
   },
   rulesList(ref: SessionRef): Promise<RulesList> {
     return call('rules.list', { sessionId: ref.sessionId, ...(ref.cwd !== undefined ? { cwd: ref.cwd } : {}) })

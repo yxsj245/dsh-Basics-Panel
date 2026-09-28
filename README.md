@@ -7,11 +7,13 @@ A DSH web plugin: a native Settings panel for visualizing and managing **MCP ser
 > **兼容性**：`0.2.0` 起适配 DSH `0.1.2-rc.1`。上游已移除 `@deepseek-ai/dsh-client-runtime`，其 `slots` / `sessions` / `locale` 客户端服务改由标准 web 组合提供（`ui-renderer` / `api-session-controller` / `client-locale`），本插件不再声明对该包的注入依赖，构建外部模块清单同步收敛。
 >
 > **归档会话兼容性**：恢复优先使用上游公开的 `unarchiveSession`（`0.1.7-rc.1` 已提供，运行中的 `0.1.5-rc.3` 尚无）；在这类尚未提供该 API 的版本上，改用注册表自身的写入通道（操作队列 + `setState`，保证磁盘、进程内快照与工作区域变更三者一致）；两者都不可用时面板置灰并明确提示，不会只改磁盘。
+>
+> **DSH 0.1.7 适配**（`0.4.0`）：客户端会话列表快照不再有 `current` 字段，面板改为按 `retainedBy.mainView` 找主视图会话（技能作用域靠它），并在宿主侧以最近的活动 Agent 兜底、在页面提示实际使用的会话；预设改为读取 `@deepseek-ai/dsh-agent-preset` 声明行的 `config.plugins`（bundle 内声明的只读），不再读取已废弃的 `~/.dsh/.agent-presets/` 目录，也不再显示没有 MCP 行的空预设卡片；开关后会轮询热重载结果，避免把「正在连接」误报成「未生效」。
 
 ## 功能
 
-- **MCP 服务器**：按作用域（用户 profile / 预设 preset）分组列出所有 MCP 服务器，展示脱敏后的配置（env / 请求头 / 密码参数 / URL 密码均打码），显示运行时状态（已连接 · N 工具 / 已启用 / 已禁用 / 未生效），并支持逐台开关（写入配置文件的 `disabled` 字段，profile 热重载、preset 新会话生效）。
-- **技能**：按作用域（项目级 / 自定义 / 用户级 / 内置 / 运行时）分组展示全部技能，支持搜索与过滤；可编辑技能的 description / whenToUse / metadata / 调用权限与正文，保存后经 filesystem watcher 热刷新生效。
+- **MCP 服务器**：按作用域（用户 profile / 预设 preset）分组列出所有 MCP 服务器，展示脱敏后的配置（env / 请求头 / 密码参数 / URL 密码均打码），显示运行时状态（已连接 · N 工具 / 已启用 / 已禁用 / 未生效；预设行按预设组合清单显示，不误报「未生效」），并支持逐台开关（写入配置文件的 `disabled` 字段，profile 热重载、preset 新会话生效；开关后轮询到状态稳定）。
+- **技能**：按作用域（项目级 / 自定义 / 用户级 / 内置 / 运行时）分组展示全部技能，支持搜索与过滤；可编辑技能的 description / whenToUse / metadata / 调用权限与正文，保存后经 filesystem watcher 热刷新生效。技能按会话预设作用域提供，面板会自动解析当前会话（并在兜底时明确提示用的是哪个会话）。
 - **规则**：展示全局规则（`~/.dsh/AGENTS.md`）与项目链规则（项目根至当前目录的 `AGENTS.md` / `CLAUDE.md` / `.local` 覆盖），支持新建（全局 / 项目根 / 当前目录）与整文件编辑，保存后新会话生效。
 - **归档会话**：列出所有已归档的会话（标题、工作目录、创建时间、日志大小、事件条数，并标出运行中 / 已装载 / 文件缺失），支持**恢复**（从归档集合移出，立即回到侧边栏原位置）与**删除**（永久移除会话日志目录、工作区记账与归档记录），删除提供单行、批量选中与全选删除全部（超过批量上限自动分批），全部走二次确认。只有 Agent 状态为 `running` 的会话不可删除；「已装载但空闲」的会话可删，确认条会点名提示。
 
@@ -20,7 +22,7 @@ A DSH web plugin: a native Settings panel for visualizing and managing **MCP ser
 | 能力 | 全局 | 项目级 | 用户级 | 预设级 | 内置 |
 |---|---|---|---|---|---|
 | 技能 | — | `<项目>/.dsh/skills`、`<项目>/.agents/skills` | `~/.dsh/skills`、`~/.agents/skills` | — | 随发行版内置 |
-| MCP | — | DSH 暂无项目级组合文件 | `~/.dsh/cordis.patch.yml`、`~/.dsh/profiles/*/cordis.patch.yml` | `~/.dsh/.agent-presets/*/agent.cordis.yml` | — |
+| MCP | — | DSH 暂无项目级组合文件 | `~/.dsh/cordis.patch.yml`、`~/.dsh/profiles/*/cordis.patch.yml` | 预设声明行（`@deepseek-ai/dsh-agent-preset`）的 `config.plugins`；bundle 内声明的只读 | — |
 | 规则 | `~/.dsh/AGENTS.md` | 项目根至 cwd 链上的 `AGENTS.md` / `CLAUDE.md` / `.local` | — | — | — |
 
 同名技能按注册表优先级显示生效版本（项目级 > 自定义 > 用户级 > 内置）。
