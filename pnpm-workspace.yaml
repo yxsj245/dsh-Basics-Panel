@@ -1,2 +1,7 @@
 packages:
   - .
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-client-locale@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-client-ui-slots@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-home-paths@0.2.0-rc.2'

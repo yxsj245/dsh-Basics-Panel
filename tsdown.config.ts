@@ -42,16 +42,37 @@ const NODE_BUILTINS = new Set([
   ...builtinModules.map(id => `node:${id}`),
 ])
 
-/** Module specifiers the web shell shares into the frozen module table (the official PLATFORM_MODULES list; `dsh-client-runtime` was removed upstream in DSH 0.1.2-alpha — its slots/sessions/locale services now come from the standard web roster: ui-renderer / api-session-controller / client-locale). */
+/**
+ * Module specifiers the web shell shares into the frozen module table (the
+ * official PLATFORM_MODULES list; `dsh-client-runtime` was removed upstream in
+ * DSH 0.1.2-alpha — its slots/sessions/locale services now come from the
+ * standard web roster: ui-renderer / api-session-controller / client-locale).
+ *
+ * `cordis` is deliberately ABSENT: the shell seeds the table under the
+ * scoped key `@deepseek-ai/cordis`, and a bare `cordis` require misses the
+ * table at runtime. src/client only ever imports `Context` from bare `cordis`
+ * (`import type`, erased), which is why the bundles currently require nothing
+ * but react — the resolve guard below keeps it that way.
+ */
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
   'react-dom',
   'react-dom/client',
-  'cordis',
+  '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
 ]
+
+/**
+ * Bare `cordis` is a type-only import in this plugin: `@deepseek-ai/cordis` is
+ * the key the browser module table actually seeds, so a surviving
+ * `require("cordis")` would throw at row import time. `verbatimModuleSyntax`
+ * only strips an import written with the `type` modifier, so this guard turns
+ * a regression (`import { Context } from 'cordis'`) into a build failure
+ * instead of a panel that silently refuses to mount.
+ */
+const BARE_CORDIS = 'cordis'
 
 /** Wire/type layers a client bundle may inline (mirror of the official INLINE_SAFE list). */
 const INLINE_SAFE = /^@deepseek-ai\/dsh-(host-apiproxy|session|llm|tools|brand)(\/|$)/
@@ -132,6 +153,13 @@ function purityGatePlugin(): BuildPlugin {
         throw new Error(
           `client bundle purity: Node builtin "${source}" cannot run in the browser module table — `
           + 'select the dependency browser export or add an explicit browser implementation',
+        )
+      }
+      if (source === BARE_CORDIS) {
+        throw new Error(
+          'client bundle purity: bare "cordis" is not a browser module-table key (the shell seeds '
+          + '"@deepseek-ai/cordis"); keep it a type-only import (`import type { Context } from \'cordis\'`) '
+          + 'or import "@deepseek-ai/cordis" instead — a surviving require("cordis") throws when the row loads',
         )
       }
       if (!source.startsWith('@deepseek-ai/')) return null

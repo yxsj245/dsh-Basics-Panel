@@ -1,6 +1,6 @@
 {
   "name": "dsh-basics-panel",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "DSH web plugin: a native Settings panel for visualizing and managing MCP servers, skills, rules and archived sessions, with a modular feature registry so future visualizations slot in without touching the shell.",
   "type": "module",
   "main": "lib/index.js",
@@ -54,7 +54,7 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-home-paths": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": "^0.1.2-rc.1 || >=0.2.0-rc.1 <0.3.0",
     "@deepseek-ai/schemastery": "^3.18.2",
     "cordis": "^4.0.0-rc.8"
   },
@@ -68,10 +68,10 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-client-locale": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.2-rc.1",
-    "@deepseek-ai/dsh-home-paths": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",

@@ -4,11 +4,13 @@ DSH Web 插件「基础能力面板」：在 DSH 设置中可视化并管理 **M
 
 A DSH web plugin: a native Settings panel for visualizing and managing **MCP servers**, **skills**, **rules** and **archived sessions**, built on a modular feature registry so future visualizations slot in without touching the shell.
 
-> **兼容性**：`0.2.0` 起适配 DSH `0.1.2-rc.1`。上游已移除 `@deepseek-ai/dsh-client-runtime`，其 `slots` / `sessions` / `locale` 客户端服务改由标准 web 组合提供（`ui-renderer` / `api-session-controller` / `client-locale`），本插件不再声明对该包的注入依赖，构建外部模块清单同步收敛。
+> **兼容性**：支持 DSH `0.1.2-rc.1` ～ `0.2.x`（peer 按 minor 线开窗，见下方 0.2.0 适配段落）。`0.2.0` 起适配 DSH `0.1.2-rc.1`：上游已移除 `@deepseek-ai/dsh-client-runtime`，其 `slots` / `sessions` / `locale` 客户端服务改由标准 web 组合提供（`ui-renderer` / `api-session-controller` / `client-locale`），本插件不再声明对该包的注入依赖，构建外部模块清单同步收敛。
 >
 > **归档会话兼容性**：恢复优先使用上游公开的 `unarchiveSession`（`0.1.7-rc.1` 已提供，运行中的 `0.1.5-rc.3` 尚无）；在这类尚未提供该 API 的版本上，改用注册表自身的写入通道（操作队列 + `setState`，保证磁盘、进程内快照与工作区域变更三者一致）；两者都不可用时面板置灰并明确提示，不会只改磁盘。
 >
 > **DSH 0.1.7 适配**（`0.4.0`）：客户端会话列表快照不再有 `current` 字段，面板改为按 `retainedBy.mainView` 找主视图会话（技能作用域靠它），并在宿主侧以最近的活动 Agent 兜底、在页面提示实际使用的会话；预设改为读取 `@deepseek-ai/dsh-agent-preset` 声明行的 `config.plugins`（bundle 内声明的只读），不再读取已废弃的 `~/.dsh/.agent-presets/` 目录，也不再显示没有 MCP 行的空预设卡片；开关后会轮询热重载结果，避免把「正在连接」误报成「未生效」。
+>
+> **DSH 0.2.0 适配**（`0.4.1`）：DSH 启动的兼容性预检（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility`）会把本插件 `package.json` 里每一条以 `@deepseek-ai/dsh` 开头的 peer 按 `semver.satisfies(宿主版本, 范围, { includePrerelease: true })` 判定，任一条不满足就让整条插件被启动预检拒绝（表现为设置里没有「基础能力」页签）。`0.4.0` 声明的 `@deepseek-ai/dsh-home-paths@^0.1.2-rc.1` 上界是 `<0.1.3`，虽然覆盖 `0.1.x` 全线（`includePrerelease: true` 下预发布版照常参与比较），但覆盖不到 `0.2.0`，对宿主 `0.2.0-rc.2` 判定为 false，插件因此被禁用；`0.4.1` 改为按 minor 线逐条列出的 `^0.1.2-rc.1 || >=0.2.0-rc.1 <0.3.0`，同时覆盖 `0.1.x` 与 `0.2.x` 两条线。四条 `@deepseek-ai/dsh-*` devDependencies 同步升到 `0.2.0-rc.2`，让 `pnpm typecheck` 按宿主的实际类型核对（本插件只从宿主取 `resolveDshHome` / `dshHomeDisplay` 两个稳定函数，实际类型无漂移）。
 
 ## 功能
 

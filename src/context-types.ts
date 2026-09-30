@@ -13,7 +13,8 @@
  * - skills: @deepseek-ai/dsh-skill (the layered skill registry)
  * - tools: @deepseek-ai/dsh-tools (ToolRuntime; `schemas()` for MCP status)
  * - loader: @deepseek-ai/cordis-plugin-loader (mounted entry tree)
- * - agentPresets: @deepseek-ai/dsh-agent-presets (optional roster)
+ * - agentPresets: @deepseek-ai/dsh-agent-preset-registry (optional roster; the
+ *   package was renamed from `dsh-agent-presets`, the service name did not change)
  * - workspaceRegistry: @deepseek-ai/dsh-workspace (WorkspaceRegistry; the
  *   registry-global archived-session set and the Workspace rows)
  * - sessionPersistence: @deepseek-ai/dsh-session-persistence (stored-session
@@ -23,6 +24,20 @@
  * - slots: the client runtime SlotRegistry
  * - locale: the client runtime locale service
  * Drift from upstream is contained to this file.
+ *
+ * Compatibility note (DSH 0.2.0): the startup pre-check in
+ * `@deepseek-ai/dsh-app-boot` (`evaluatePluginCompatibility`) tests every
+ * peer whose name is `@deepseek-ai/dsh` or starts with `@deepseek-ai/dsh-`
+ * against the running runtime with
+ * `semver.satisfies(runtime, range, { includePrerelease: true })` and refuses
+ * the WHOLE plugin when one range misses. `includePrerelease` makes
+ * prereleases compare normally, so `^0.1.2-rc.1` already covers the whole
+ * 0.1.x line (0.1.5-rc.3 and 0.1.7-rc.2 included); what it cannot cover is
+ * 0.2.x, because a 0.x caret stops below the next minor (`<0.1.3`). Hence
+ * `@deepseek-ai/dsh-home-paths` is declared as
+ * `^0.1.2-rc.1 || >=0.2.0-rc.1 <0.3.0`; the `resolveDshHome` and
+ * `dshHomeDisplay` functions read from it are unchanged across both lines.
+ * When a 0.3.x line appears, extend that tuple list in package.json too.
  *
  * This file must stay FREE of Node.js types (`node:http`, `node:stream`,
  * `Buffer`): it is part of the CLIENT-reachable declaration graph, so a Node
@@ -137,12 +152,17 @@ export interface BasicsLoader {
 }
 
 /**
- * One agent-preset roster row (mirror of the agent-preset registry's `list()`).
- * DSH ≤0.1.6 declared presets as directories and published `path` + `trust`;
- * DSH ≥0.1.7 declares them as ordinary Cordis rows inside composition files,
- * so the roster carries identity and activation state only — the composition
- * itself is read from the Loader tree or from the declaring file (see
- * features/mcp/preset-scan.ts).
+ * One agent-preset roster row (mirror of the agent-preset registry's `list()`,
+ * `@deepseek-ai/dsh-agent-preset-registry` in DSH ≥0.1.7 — the package was
+ * renamed from `dsh-agent-presets`, the `agentPresets` service name did not
+ * change).
+ *
+ * Directory presets (DSH ≤0.1.6) are never read through this face by the
+ * plugin: `features/mcp/composition-scan.ts` only uses the service's presence
+ * to decide whether the legacy `$DSH_HOME/.agent-presets/` directory scan is
+ * still relevant, so the pre-0.1.6 fields below are kept as inert shape only.
+ * The activation state that matters lives on {@link AgentPresetComposition},
+ * where `isDefault` actually is.
  */
 export interface AgentPresetRow {
   id: string
@@ -152,8 +172,8 @@ export interface AgentPresetRow {
   path?: string
   name?: string
   description?: string
-  /** Whether a session naming no preset composes this one (DSH ≥0.1.7). */
-  isDefault?: boolean
+  /** Roster position (DSH ≥0.1.7). */
+  order?: number
   /** Why this preset cannot compose a session (DSH ≥0.1.7). */
   broken?: string
 }
