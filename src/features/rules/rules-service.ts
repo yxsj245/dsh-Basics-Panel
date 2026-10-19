@@ -8,7 +8,7 @@
  * take effect for new sessions.
  */
 import { readFile, stat } from 'node:fs/promises'
-import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { agentsHomeDisplay, dshHomeDisplay, resolveAgentsHome, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { FeatureContext } from '../registry.ts'
 import { BasicsError, requireString } from '../../wire.ts'
 import { atomicWrite, samePath } from '../../atomic.ts'
@@ -61,15 +61,15 @@ export function registerRules(fc: FeatureContext): Record<string, (payload: unkn
     return cwd ?? fc.sessionCwdOf(payload)
   }
 
-  const homeOf = (): { dshHome: string; displayHome: string } => {
+  const homeOf = () => {
     const dshHome = resolveDshHome()
-    return { dshHome, displayHome: dshHomeDisplay(dshHome) }
+    const agentsHome = resolveAgentsHome()
+    return { dshHome, displayHome: dshHomeDisplay(dshHome), agentsHome, displayAgentsHome: agentsHomeDisplay(agentsHome) }
   }
 
-  /** Re-resolve a rule key against the fresh discovery; reject anything else. */
+  /** 每次读写都重新发现白名单，包含宿主认可的两个全局规则根。 */
   const findRule = async (key: string, cwd: string): Promise<RuleFile> => {
-    const { dshHome, displayHome } = homeOf()
-    const rules = await discoverRuleFiles({ cwd, dshHome, displayHome })
+    const rules = await discoverRuleFiles({ cwd, ...homeOf() })
     const rule = rules.find(candidate => samePath(candidate.absolutePath, key))
     if (rule === undefined) {
       throw new BasicsError('forbidden', '该规则文件不在可编辑范围内', 403)
@@ -83,9 +83,8 @@ export function registerRules(fc: FeatureContext): Record<string, (payload: unkn
     projectRoot: string
   }> => {
     const cwd = cwdOf(payload)
-    const { dshHome, displayHome } = homeOf()
     const projectRoot = await findProjectRoot(cwd)
-    const rules = await discoverRuleFiles({ cwd, dshHome, displayHome, projectRoot })
+    const rules = await discoverRuleFiles({ cwd, ...homeOf(), projectRoot })
     const rows: RuleRow[] = await Promise.all(rules.map(async rule => {
       const info = await stat(rule.absolutePath).catch(() => undefined)
       return {

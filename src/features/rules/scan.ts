@@ -103,24 +103,34 @@ export async function discoverRuleFiles(options: {
   dshHome: string
   /** Display form of the harness home (e.g. `~/.dsh`); defaults to the raw home. */
   displayHome?: string
+  /** 共享规则根；与宿主的 DSH_AGENTS_HOME 保持一致。 */
+  agentsHome?: string
+  displayAgentsHome?: string
   /** Pre-resolved project root (skips the upward marker walk). */
   projectRoot?: string
   exists?: (path: string) => Promise<boolean>
 }): Promise<RuleFile[]> {
   const exists = options.exists ?? fileExists
-  const displayHome = options.displayHome ?? options.dshHome
   const files: RuleFile[] = []
-
-  const globalPath = join(options.dshHome, RULES_GLOBAL_FILE)
-  if (await exists(globalPath)) {
-    files.push({
-      scope: 'global',
-      fileName: RULES_GLOBAL_FILE,
-      absolutePath: globalPath,
-      // 展示路径统一用正斜杠（与 DSH 的 ~/.dsh/AGENTS.md 展示一致）。
-      displayPath: `${displayHome.replaceAll('\\', '/')}/${RULES_GLOBAL_FILE}`,
-      directory: options.dshHome,
-    })
+  const roots = [{ directory: options.dshHome, display: options.displayHome ?? options.dshHome }]
+  if (options.agentsHome !== undefined) {
+    roots.push({ directory: options.agentsHome, display: options.displayAgentsHome ?? options.agentsHome })
+  }
+  const seen = new Set<string>()
+  for (const root of roots) {
+    const globalPath = resolve(root.directory, RULES_GLOBAL_FILE)
+    const key = process.platform === 'win32' ? globalPath.toLowerCase() : globalPath
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (await exists(globalPath)) {
+      files.push({
+        scope: 'global',
+        fileName: RULES_GLOBAL_FILE,
+        absolutePath: globalPath,
+        displayPath: `${root.display.replaceAll('\\', '/')}/${RULES_GLOBAL_FILE}`,
+        directory: root.directory,
+      })
+    }
   }
 
   const cwd = resolve(options.cwd)

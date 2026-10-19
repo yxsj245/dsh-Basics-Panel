@@ -9,7 +9,7 @@
  * - webServer: @deepseek-ai/dsh-host-webserver (the WebServer)
  * - sessions: host side @deepseek-ai/dsh-session (SessionStore), client side
  *   the runtime ISessions list feed
- * - webRuntime: @deepseek-ai/dsh-web-app (bind-derived trusted hosts)
+ * - connection: @deepseek-ai/dsh-client-connection (来源校验、认证与 Peer 身份)
  * - skills: @deepseek-ai/dsh-skill (the layered skill registry)
  * - tools: @deepseek-ai/dsh-tools (ToolRuntime; `schemas()` for MCP status)
  * - loader: @deepseek-ai/cordis-plugin-loader (mounted entry tree)
@@ -25,19 +25,9 @@
  * - locale: the client runtime locale service
  * Drift from upstream is contained to this file.
  *
- * Compatibility note (DSH 0.2.0): the startup pre-check in
- * `@deepseek-ai/dsh-app-boot` (`evaluatePluginCompatibility`) tests every
- * peer whose name is `@deepseek-ai/dsh` or starts with `@deepseek-ai/dsh-`
- * against the running runtime with
- * `semver.satisfies(runtime, range, { includePrerelease: true })` and refuses
- * the WHOLE plugin when one range misses. `includePrerelease` makes
- * prereleases compare normally, so `^0.1.2-rc.1` already covers the whole
- * 0.1.x line (0.1.5-rc.3 and 0.1.7-rc.2 included); what it cannot cover is
- * 0.2.x, because a 0.x caret stops below the next minor (`<0.1.3`). Hence
- * `@deepseek-ai/dsh-home-paths` is declared as
- * `^0.1.2-rc.1 || >=0.2.0-rc.1 <0.3.0`; the `resolveDshHome` and
- * `dshHomeDisplay` functions read from it are unchanged across both lines.
- * When a 0.3.x line appears, extend that tuple list in package.json too.
+ * 0.4.2 起要求 DSH >=0.2.1-rc.2 <0.3.0-0，宿主认证统一走 Connection。
+ * 公开服务使用面在 tests/dsh-runtime.spec.ts 对真实宿主验证；显式指定
+ * DSH_RUNTIME_NODE_MODULES 后，服务缺失必须失败，不允许静默跳过。
  *
  * This file must stay FREE of Node.js types (`node:http`, `node:stream`,
  * `Buffer`): it is part of the CLIENT-reachable declaration graph, so a Node
@@ -72,9 +62,11 @@ export interface BasicsWebServer {
   register(route: BasicsWebRoute): () => void
 }
 
-/** The web runtime service face: the bind-derived trust list for the browser fence. */
-export interface BasicsWebRuntime {
-  trustedHosts: readonly string[]
+/** 宿主 Connection 统一负责 Host/Origin 栅栏、Cookie/API 凭据和 Peer 身份。 */
+export interface BasicsHostConnection {
+  admit(request: Pick<BasicsHttpRequest, 'headers'>):
+    | { readonly rejection: 401 | 403 }
+    | { readonly peer: { readonly principal: { readonly kind: string } } }
 }
 
 /** A published session's header slice the host reads (authoritative cwd). */
@@ -356,7 +348,8 @@ declare module 'cordis' {
   interface Context {
     webServer: BasicsWebServer
     sessions: BasicsSessionStore & BasicsSessionsService
-    webRuntime: BasicsWebRuntime
+    /** 宿主侧认证与来源校验，不再依赖已移除的 webRuntime。 */
+    connection: BasicsHostConnection
     skills: BasicsSkillRegistry
     tools: BasicsToolRuntime
     loader: BasicsLoader

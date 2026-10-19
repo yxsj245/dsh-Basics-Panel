@@ -72,10 +72,15 @@ async function call<T>(method: string, payload: Record<string, unknown>): Promis
   } catch {
     body = undefined
   }
-  if (body === undefined || body.ok !== true || body.error !== undefined) {
+  if (!response.ok || body === undefined || body.ok !== true || body.error !== undefined) {
+    const fallback = response.status === 401
+      ? '登录状态已失效，请通过 DSH 启动时提供的登录链接重新打开页面。'
+      : response.status === 405
+        ? '基础能力接口尚未挂载，请确认插件兼容版本已同步并重启 DSH。'
+        : `HTTP ${response.status}`
     throw new BasicsApiError(
-      body?.error?.code ?? 'internal',
-      body?.error?.message ?? `HTTP ${response.status}`,
+      body?.error?.code ?? (response.status === 401 ? 'unauthorized' : 'internal'),
+      body?.error?.message ?? fallback,
     )
   }
   return body.value as T

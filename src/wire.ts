@@ -11,6 +11,7 @@ export type BasicsErrorCode =
   | 'bad-request'
   | 'not-found'
   | 'forbidden'
+  | 'unauthorized'
   | 'method-error'
   | 'fs-error'
   | 'skill-error'

@@ -1,102 +1,81 @@
 # dsh-basics-panel
 
-DSH Web 插件「基础能力面板」：在 DSH 设置中可视化并管理 **MCP 服务器**、**技能**、**规则** 与 **归档会话**。采用模块化 feature 注册表，后续的 DSH 可视化功能只需新增一个 feature 目录并在注册表加一行即可，无需改动面板骨架。
+DSH Web 插件「基础能力面板」：在 **设置 → 基础能力** 中可视化管理 **MCP 服务器、技能、规则与归档会话**。
 
-A DSH web plugin: a native Settings panel for visualizing and managing **MCP servers**, **skills**, **rules** and **archived sessions**, built on a modular feature registry so future visualizations slot in without touching the shell.
+## 当前兼容版本
 
-> **兼容性**：支持 DSH `0.1.2-rc.1` ～ `0.2.x`（peer 按 minor 线开窗，见下方 0.2.0 适配段落）。`0.2.0` 起适配 DSH `0.1.2-rc.1`：上游已移除 `@deepseek-ai/dsh-client-runtime`，其 `slots` / `sessions` / `locale` 客户端服务改由标准 web 组合提供（`ui-renderer` / `api-session-controller` / `client-locale`），本插件不再声明对该包的注入依赖，构建外部模块清单同步收敛。
->
-> **归档会话兼容性**：恢复优先使用上游公开的 `unarchiveSession`（`0.1.7-rc.1` 已提供，运行中的 `0.1.5-rc.3` 尚无）；在这类尚未提供该 API 的版本上，改用注册表自身的写入通道（操作队列 + `setState`，保证磁盘、进程内快照与工作区域变更三者一致）；两者都不可用时面板置灰并明确提示，不会只改磁盘。
->
-> **DSH 0.1.7 适配**（`0.4.0`）：客户端会话列表快照不再有 `current` 字段，面板改为按 `retainedBy.mainView` 找主视图会话（技能作用域靠它），并在宿主侧以最近的活动 Agent 兜底、在页面提示实际使用的会话；预设改为读取 `@deepseek-ai/dsh-agent-preset` 声明行的 `config.plugins`（bundle 内声明的只读），不再读取已废弃的 `~/.dsh/.agent-presets/` 目录，也不再显示没有 MCP 行的空预设卡片；开关后会轮询热重载结果，避免把「正在连接」误报成「未生效」。
->
-> **DSH 0.2.0 适配**（`0.4.1`）：DSH 启动的兼容性预检（`@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility`）会把本插件 `package.json` 里每一条以 `@deepseek-ai/dsh` 开头的 peer 按 `semver.satisfies(宿主版本, 范围, { includePrerelease: true })` 判定，任一条不满足就让整条插件被启动预检拒绝（表现为设置里没有「基础能力」页签）。`0.4.0` 声明的 `@deepseek-ai/dsh-home-paths@^0.1.2-rc.1` 上界是 `<0.1.3`，虽然覆盖 `0.1.x` 全线（`includePrerelease: true` 下预发布版照常参与比较），但覆盖不到 `0.2.0`，对宿主 `0.2.0-rc.2` 判定为 false，插件因此被禁用；`0.4.1` 改为按 minor 线逐条列出的 `^0.1.2-rc.1 || >=0.2.0-rc.1 <0.3.0`，同时覆盖 `0.1.x` 与 `0.2.x` 两条线。四条 `@deepseek-ai/dsh-*` devDependencies 同步升到 `0.2.0-rc.2`，让 `pnpm typecheck` 按宿主的实际类型核对（本插件只从宿主取 `resolveDshHome` / `dshHomeDisplay` 两个稳定函数，实际类型无漂移）。
+**插件 0.4.2 要求 DSH `>=0.2.1-rc.2 <0.3.0-0`。** 本次实际核对与回归的宿主是 `0.2.1-rc.2`；范围内未来版本仍需复验，不代表预先认证。
 
-## 功能
+- 修复升级后四个页签的空 HTTP 405：旧插件等待已移除的 `webRuntime`，后端未挂载，请求落到静态页面 fallback。
+- 宿主注入改为 `webServer / connection / sessions / skills / tools`，所有管理请求先走公开的 `connection.admit()`：沿用宿主 Host/Origin 栅栏、浏览器登录 Cookie 和 API Peer 认证，并只允许 `owner` 身份。
+- 不提供免认证降级，不再维护旧的独立信任栅栏。401 提示重新登录；空 405 提示检查安装副本并重启。
+- 全局规则补齐 `$DSH_AGENTS_HOME/AGENTS.md`（默认 `~/.agents/AGENTS.md`），与 `$DSH_HOME/AGENTS.md` 一起发现；新建全局规则仍只写 DSH 根。
+- 四个 DSH 开发依赖对齐 `0.2.1-rc.2`，Cordis 对齐 `4.0.5`；两个插件清单版本同步为 `0.4.2`。
 
-- **MCP 服务器**：按作用域（用户 profile / 预设 preset）分组列出所有 MCP 服务器，展示脱敏后的配置（env / 请求头 / 密码参数 / URL 密码均打码），显示运行时状态（已连接 · N 工具 / 已启用 / 已禁用 / 未生效；预设行按预设组合清单显示，不误报「未生效」），并支持逐台开关（写入配置文件的 `disabled` 字段，profile 热重载、preset 新会话生效；开关后轮询到状态稳定）。
-- **技能**：按作用域（项目级 / 自定义 / 用户级 / 内置 / 运行时）分组展示全部技能，支持搜索与过滤；可编辑技能的 description / whenToUse / metadata / 调用权限与正文，保存后经 filesystem watcher 热刷新生效。技能按会话预设作用域提供，面板会自动解析当前会话（并在兜底时明确提示用的是哪个会话）。
-- **规则**：展示全局规则（`~/.dsh/AGENTS.md`）与项目链规则（项目根至当前目录的 `AGENTS.md` / `CLAUDE.md` / `.local` 覆盖），支持新建（全局 / 项目根 / 当前目录）与整文件编辑，保存后新会话生效。
-- **归档会话**：列出所有已归档的会话（标题、工作目录、创建时间、日志大小、事件条数，并标出运行中 / 已装载 / 文件缺失），支持**恢复**（从归档集合移出，立即回到侧边栏原位置）与**删除**（永久移除会话日志目录、工作区记账与归档记录），删除提供单行、批量选中与全选删除全部（超过批量上限自动分批），全部走二次确认。只有 Agent 状态为 `running` 的会话不可删除；「已装载但空闲」的会话可删，确认条会点名提示。
+较早 DSH 请保留旧插件版本；0.4.1 之前的兼容记录不代表 0.4.2 继续支持旧宿主。详细操作见 [使用文档](<docs/使用文档.md>)；本轮证据与限制见 [0.2.1 兼容记录](<docs/dsh-0.2.1-compatibility.md>)。
 
-## 作用域说明
+## 功能与范围
 
-| 能力 | 全局 | 项目级 | 用户级 | 预设级 | 内置 |
-|---|---|---|---|---|---|
-| 技能 | — | `<项目>/.dsh/skills`、`<项目>/.agents/skills` | `~/.dsh/skills`、`~/.agents/skills` | — | 随发行版内置 |
-| MCP | — | DSH 暂无项目级组合文件 | `~/.dsh/cordis.patch.yml`、`~/.dsh/profiles/*/cordis.patch.yml` | 预设声明行（`@deepseek-ai/dsh-agent-preset`）的 `config.plugins`；bundle 内声明的只读 | — |
-| 规则 | `~/.dsh/AGENTS.md` | 项目根至 cwd 链上的 `AGENTS.md` / `CLAUDE.md` / `.local` | — | — | — |
+| 页签 | 功能与边界 |
+|---|---|
+| MCP | 按 profile / preset 分组、配置脱敏、启用与禁用、修改配置。预设修改对新会话生效。无可用激活证据时显示未知，不伪报连接成功。 |
+| 技能 | 按当前会话 Agent 的作用域列出技能、查看与编辑可写技能；内置/运行时技能只读。作用域兜底时提示实际使用的会话。 |
+| 规则 | 两个全局根和项目根至 cwd 的规则链；查看、编辑、新建。规则基线通常对新会话生效。 |
+| 归档会话 | 列出、恢复和确认后删除；运行中拒绝删除，已装载空闲会话仍须注意重新落盘风险。事件条数仅在后端提供时显示。 |
 
-同名技能按注册表优先级显示生效版本（项目级 > 自定义 > 用户级 > 内置）。
+配置文件、规则和会话产物使用 **DSH 宿主本地文件系统**，不是当前远程工作区的 SSH 文件系统。归档删除不清理附件、查询 SQLite 索引等派生数据，也不承诺协调其他进程的会话写入锁；有其他进程使用同一会话时不要删除。
 
-## 安装
+## 安装与更新
 
-开发完成后，用官方通道安装（或手动挂载）：
-
-```bash
-dsh plugin --profile web add dsh-basics-panel@<version>
-```
-
-手动挂载：将本包放入 profile 解析范围，并在 `~/.dsh/profiles/web/cordis.patch.yml` 写入：
-
-```yaml
-- insert:
-    - id: basics-panel
-      name: 'dsh-basics-panel'
-```
-
-### 本地 `file:` 依赖：构建后必须同步安装副本
-
-本仓库当前以 `file:` 本地依赖挂在 web profile 上，pnpm 会在**安装时把包复制**到 `$DSH_HOME/profiles/<profile>/node_modules/dsh-basics-panel`，DSH 的宿主半边与客户端 bundle 都从**该副本**加载。也就是说 `pnpm build` 只更新仓库，不更新 DSH 实际运行的代码；`cordis.patch.yml` / `LICENSE` 这两个文件是手工硬链接的，所以配置改动会穿过去，代码改动不会——这是最容易踩的坑。
-
-```bash
-pnpm build
-pnpm run sync:check   # 只校验：影响运行的文件（lib/、package.json）不一致时列出差异并退出码 1
-pnpm run sync         # 同步产物到副本（默认 profile=web，可用 --profile / DSH_PROFILE / DSH_HOME 覆盖）
-```
-
-同步时目录整体替换、文件原地覆盖（保留 `cordis.patch.yml` / `LICENSE` 的硬链接），因此这两处配置改动依旧无需同步即生效。
-
-同步后**重启 DSH 进程**（宿主半边在启动时载入）并硬刷新浏览器（Ctrl+F5）载入新的客户端 bundle。若想让后续构建免同步，可把 profile 依赖改成 `link:`（pnpm 会建符号链接），但那会改动 profile 的 `package.json` / lockfile。
-
-## 开发
+此包当前没有 npm registry 发布包。先在源码目录构建，再用官方 CLI 安装本地依赖：
 
 ```bash
 pnpm install
-pnpm typecheck   # tsc --noEmit
-pnpm test        # vitest
-pnpm build       # tsc 声明 + tsdown（lib/index.js + lib/client.js + lib/client-registry.js）
-pnpm run sync    # 把构建产物同步到 profile 安装副本（见上一节）
+pnpm typecheck
+pnpm test
+pnpm build
+dsh plugin --profile web add file:<源码目录绝对路径>
+```
+
+当前 web profile 已经是 `file:` 依赖时，可使用本仓库的定向同步通道；构建本身不会更新安装副本：
+
+```bash
+pnpm run sync
 pnpm run sync:check
 ```
 
-### 约束：可选服务必须在调用时刻解析
+同步目标默认为 `$DSH_HOME/profiles/web/node_modules/dsh-basics-panel`，可用 `--profile`、`DSH_PROFILE`、`DSH_HOME` 覆盖。同步前请备份安装副本和 profile；同步脚本会整体替换本插件的发布目录，不修改其他插件。不要把尚未完成的构建同步到运行环境。
 
-Cordis 的 `ctx.get(name)` 默认是**严格**的：提供该服务的 fiber 还没进入 ACTIVE 时返回 `undefined`。本插件的 `inject` 只声明 `webServer` / `webRuntime` / `sessions` / `skills` / `tools`，而 `workspaceRegistry`（`@deepseek-ai/dsh-workspace`）、`sessionPersistence`、`agentPresets` 等都可能**晚于本插件就绪**——`dsh-workspace` 尤其慢，它要先 await 打开工作区域域存储、恢复未完成写入、索引会话头。
+**更新后必须重启原 DSH 进程，并在原页面 Ctrl+F5 刷新。** 只刷新浏览器不会重新挂载宿主路由；不需要另开 Web 服务。401 时通过 DSH 启动提供的登录链接重新进入，不要关闭认证。
 
-所以：
+## 开发与回归
 
-- 这些服务只在处理函数体内 `ctx.get(...)`，**绝不在 `apply()` 阶段缓存**（缓存会拿到 `undefined` 并固化到进程结束，症状就是页签提示「未挂载工作区注册表」）；
-- 也不要为了「拿得稳」把它们写进 `inject`：那会让本面板在未挂载 `dsh-workspace` 的 profile 上永不挂载，并随该 fiber 的更替反复卸载重载。
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+```
 
-`tests/archive-store.spec.ts` 里的假 ctx 可以切换服务可用性，用于回归这类时序问题。
+真实宿主契约测试需要将 `DSH_RUNTIME_NODE_MODULES` 指向所测试 DSH 的 `node_modules`；未指定时该组明确跳过，指定无效路径或宿主缺少服务时必须失败。PowerShell 示例：
 
-## 目录结构
+```powershell
+$env:DSH_RUNTIME_NODE_MODULES = '<当前 DSH 安装目录>/node_modules'
+pnpm test
+dsh --profile web --dump-config
+```
 
-- `src/index.ts` — Host 半边：fenced `/basics/api` 路由 + feature 合并
-- `src/features/<id>/` — Host 侧 feature 后端（MCP / skills / rules / archived）
-- `src/client/index.tsx` — 客户端半边：注册 `settings.section`
-- `src/client/feature-registry.tsx` — 客户端 feature 注册表（扩展点）
-- `docs/` — 使用文档与设计文档
+真实测试加载官方 Cordis、Connection、BrowserAuth 与兼容性预检，使用隔离内存凭据；不会读取用户凭据、调用模型或启动替代 GUI。HTTP 回归另外覆盖四类读取、只读写入拒绝、请求体上限、认证失败、原型属性拒绝及路由卸载。`--dump-config` 只是组合预检，不等同于全部服务实际激活或浏览器点击验收。
+
+### 可选服务必须在调用时刻解析
+
+`workspaceRegistry`、`sessionPersistence`、`agentPresets` 等可能晚于本插件就绪，因此各功能每次请求重新 `ctx.get()`，不在启动时固化空值，也不将可选服务变成强制依赖。
 
 ## 安全
 
-- 所有路由过浏览器信任围栏（loopback / `webRuntime.trustedHosts`）
-- 敏感值只脱敏展示、绝不回传明文
-- 写文件严格白名单：MCP 仅可改写扫描发现且非 system 的组合文件；技能仅可改写注册表返回且非内置/运行时的文件；规则仅可读写 DSH 规则发现机制认可的路径（全局 `AGENTS.md` 与项目链候选文件）
-- 所有写操作原子写（临时文件 + rename）+ mtime 冲突拒绝
-- 归档会话的恢复/删除只接受归档集合内的会话 ID；删除目标目录由 Host 在配置的会话根目录内重新扫描校验（目录名必须等于会话 ID、必须位于根目录内、必须含日志代际文件），**正在运行**（`ctx.agents.get(id)?.status === 'running'`）的会话一律拒绝；恢复优先走上游 `unarchiveSession`，否则走注册表自身的写入通道，通道不可用时明确报错而不只改磁盘
-- 行状态区分两级：`running`（Agent 在处理回合，继承上游 `AgentStatus`）与 `loaded`（会话对象在本进程内存里，归档不会卸载它）。删除只拦 `running`；对 `loaded` 但空闲的会话，确认条会提示「仍装载在本次进程中」的风险后再执行
+- 每个管理请求先通过宿主认证和来源校验，拒绝后不读取请求体、不调用功能后端。
+- MCP 配置敏感值脱敏；文件写入须重新发现路径白名单；技能/规则保存有大小与 mtime 检查。
+- `readOnly` 禁止所有修改；`allowSessionDelete: false` 可单独禁止删除归档。
+- 归档删除只接受归档集合里的 ID，重新定位并验证宿主本地会话目录；不是上游会话删除 API，也不是跨进程回收服务。
 
 ## License
 
