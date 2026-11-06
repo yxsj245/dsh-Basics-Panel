@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -72,12 +72,33 @@ describe('findSessionArtifact', () => {
     expect(found?.bytes).toBe(10)
   })
 
-  it('returns undefined for an unknown, unsafe, or non-artifact directory', async () => {
+  it('区分确认不存在与无法验证的目录布局或根目录', async () => {
     await seedSession('--proj--', 'session-3', ['notes.txt'])
-    expect(await findSessionArtifact(root, 'session-3')).toBeUndefined()
+    await expect(findSessionArtifact(root, 'session-3')).rejects.toThrow('布局无法验证')
     expect(await findSessionArtifact(root, 'session-missing')).toBeUndefined()
     expect(await findSessionArtifact(root, '../session-3')).toBeUndefined()
-    expect(await findSessionArtifact(join(root, 'nope'), 'session-3')).toBeUndefined()
+    await expect(findSessionArtifact(join(root, 'nope'), 'session-3')).rejects.toThrow()
+  })
+
+  it('拒绝多个项目目录下的同名会话', async () => {
+    await seedSession('--proj-a--', 'session-duplicate', ['session.jsonl'])
+    await seedSession('--proj-b--', 'session-duplicate', ['session.v3.jsonl.zstd'])
+    await expect(findSessionArtifact(root, 'session-duplicate')).rejects.toThrow('多个同名')
+  })
+
+  it('根路径是普通文件时不当成空目录', async () => {
+    const wrongRoot = join(root, 'not-a-directory')
+    await writeFile(wrongRoot, 'keep')
+    await expect(findSessionArtifact(wrongRoot, 'session-3')).rejects.toThrow()
+  })
+
+  it('拒绝项目和会话目录的符号链接或 junction', async () => {
+    const directory = await seedSession('--proj--', 'session-linked', ['session.jsonl'])
+    await symlink(directory, join(root, '--proj--', 'session-alias'), process.platform === 'win32' ? 'junction' : 'dir')
+    await expect(findSessionArtifact(root, 'session-alias')).rejects.toThrow('真实目录')
+    await symlink(join(root, '--proj--'), join(root, '--linked-project--'), process.platform === 'win32' ? 'junction' : 'dir')
+    await expect(findSessionArtifact(root, 'session-linked')).rejects.toThrow('链接目录')
+    expect((await stat(join(directory, 'session.jsonl'))).isFile()).toBe(true)
   })
 
   it('counts every file in the session directory', async () => {

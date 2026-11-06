@@ -3,8 +3,13 @@
  * 普通 CI 未设置 DSH_RUNTIME_NODE_MODULES 时明确跳过；显式指定错误路径必须失败。
  * 凭据仅使用内存替身，不读取用户凭据、不启动 Web 服务或调用模型。
  */
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { registerArchived } from '../src/features/archived/archived-service.ts'
+import { resolveBasicsConfig } from '../src/config.ts'
+import type { BasicsStoredSession } from '../src/context-types.ts'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as basics from '../src/index.ts'
@@ -104,11 +109,59 @@ suite('DSH 真实宿主兼容契约', () => {
     expect(routes.has('/basics/api')).toBe(false)
   }, 10_000)
 
+  it('真实 JSONL 的未物化会话保持归档，物化关闭后按宿主位置删除临时产物', async () => {
+    const load = (name: string) => import(pathToFileURL(join(runtimeRoot!, '@deepseek-ai', name, 'lib/index.js')).href)
+    const { Context: RealContext } = await load('cordis')
+    const jsonl = await load('dsh-session-persistence-jsonl')
+    const { SESSION_FORMAT_VERSION } = await load('dsh-session')
+    const directory = await mkdtemp(join(tmpdir(), 'basics-real-jsonl-'))
+    const root = new RealContext() as RuntimeContext
+    const ready = new Promise<void>(resolve => { root.inject(['sessionPersistence'], () => resolve()) })
+    const fiber = root.plugin(jsonl, { root: directory, compression: 'none' })
+    let handle: { flush(): Promise<void>; close(): Promise<void> } | undefined
+    try {
+      await ready
+      const persistence = root.get('sessionPersistence') as {
+        create(header: unknown): Promise<{ flush(): Promise<void>; close(): Promise<void> }>
+        list(): Promise<BasicsStoredSession[]>
+      }
+      const id = `session-${randomUUID()}`
+      handle = await persistence.create({ id, version: SESSION_FORMAT_VERSION, createdAt: Date.now(), cwd: directory, isSeeded: false })
+      let archivedIds = [id]
+      const registry = {
+        get archivedSessionIds() { return archivedIds }, list: () => [],
+        unarchiveSession: async (removed: string) => { archivedIds = archivedIds.filter(item => item !== removed) },
+      }
+      const ctx = {
+        get: (name: string) => name === 'sessionPersistence' ? persistence : name === 'workspaceRegistry' ? registry : undefined,
+        sessions: { get: () => undefined },
+      } as unknown as Context
+      const api = registerArchived({ ctx, resolved: resolveBasicsConfig({ sessionsRoot: directory }), sessionCwdOf: () => directory })
+      expect((await persistence.list())[0]?.location).toBeUndefined()
+      expect(await api['archived.delete']!({ ids: [id] })).toMatchObject({ changed: [], archivedIds: [id] })
+      await handle.flush()
+      await handle.close()
+      handle = undefined
+      const location = (await persistence.list())[0]?.location
+      expect(location?.kind).toBe('jsonl')
+      expect((await stat(location!.path!)).isFile()).toBe(true)
+      expect(await api['archived.delete']!({ ids: [id] })).toMatchObject({ changed: [id], archivedIds: [] })
+      await expect(stat(location!.path!)).rejects.toThrow()
+    } finally {
+      await handle?.close()
+      await fiber.dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 10_000)
+
   it('peer/旧版 manifest 的支持范围与真实宿主预检一致', async () => {
     const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
     const legacy = JSON.parse(await readFile(new URL('../dsh.plugin.json', import.meta.url), 'utf8'))
     const { evaluatePluginCompatibility } = await import(pathToFileURL(join(runtimeRoot!, '@deepseek-ai/dsh-app-boot/lib/index.js')).href)
-    expect(evaluatePluginCompatibility(packageJson, {}, '0.2.1-rc.2')).toBeUndefined()
+    const runtimePackage = JSON.parse(await readFile(join(runtimeRoot!, '@deepseek-ai/dsh/package.json'), 'utf8'))
+    expect(evaluatePluginCompatibility(packageJson, {}, runtimePackage.version)).toBeUndefined()
+    expect(evaluatePluginCompatibility(packageJson, {}, '0.2.2-rc.1')).toBeUndefined()
+    expect(evaluatePluginCompatibility(packageJson, {}, '0.2.1-rc.2')).toBeDefined()
     expect(evaluatePluginCompatibility(packageJson, {}, '0.2.0-rc.2')).toBeDefined()
     expect(evaluatePluginCompatibility(packageJson, {}, '0.3.0-rc.1')).toBeDefined()
     expect(legacy.version).toBe(packageJson.version)

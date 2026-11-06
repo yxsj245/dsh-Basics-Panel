@@ -69,7 +69,7 @@ const api = (ctx: Context): Record<string, (payload: unknown) => Promise<unknown
 )
 
 interface ListResult {
-  groups: { scope: string, scopeLabel: string, path: string, readOnly: boolean, servers: { serverName: string, runtime: { mounted: boolean, toolCount: number, probe: string } }[] }[]
+  groups: { scope: string, scopeLabel: string, path: string, readOnly: boolean, servers: { serverName: string, args?: string[], url?: string, runtime: { mounted: boolean, toolCount: number, probe: string } }[] }[]
 }
 
 let home: string
@@ -156,6 +156,29 @@ describe('mcp.setEnabled scope targeting', () => {
 
   it('rejects a preset id that does not hold the row', async () => {
     await expect(toggle('other', 'mcp-dup-preset')).rejects.toThrow(/未找到/)
+  })
+})
+
+describe('MCP 脱敏展示与保存', () => {
+  it('等号参数和 URL 查询凭据不出现在列表中，原样保存保持原值', async () => {
+    const rawArgs = ['--token=argument-secret', '--host', 'example.com']
+    const rawUrl = 'https://example.com/mcp?access_token=query-secret&mode=sse'
+    await writeFile(patchPath, JSON.stringify([{ insert: [{ id: 'mcp-secret', name: '@deepseek-ai/dsh-mcp-client', config: {
+      serverName: 'masked', transport: 'streamable-http', args: rawArgs, url: rawUrl,
+    } }] }]))
+    const handlers = api(ctxOf({}))
+    const listed = await handlers['mcp.list']!({}) as ListResult
+    expect(JSON.stringify(listed)).not.toContain('argument-secret')
+    expect(JSON.stringify(listed)).not.toContain('query-secret')
+    const server = listed.groups.flatMap(group => group.servers)[0]!
+    const payload = { path: patchPath, rowId: 'mcp-secret', serverName: 'masked', patch: { args: server.args, url: server.url } }
+    await handlers['mcp.save']!(payload)
+    const saved = await readFile(patchPath, 'utf8')
+    expect(saved).toContain('argument-secret')
+    expect(saved).toContain('query-secret')
+    expect(saved).not.toContain('••••')
+    await expect(handlers['mcp.save']!({ ...payload, patch: { url: server.url!.replace('example.com', 'other.example') } })).rejects.toThrow('完整地址')
+    expect(await readFile(patchPath, 'utf8')).toBe(saved)
   })
 })
 

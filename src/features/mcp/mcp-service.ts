@@ -12,7 +12,7 @@ import { requireString, optionalString, requireBoolean } from '../../wire.ts'
 import { atomicWrite, samePath } from '../../atomic.ts'
 import { scanMcpSources, isMcpClientName, type McpRowFile, type McpSourceFile } from './composition-scan.ts'
 import { setRowDisabled, setRowConfig, type RowConfigPatch } from './yaml-edit.ts'
-import { MASK, maskArgs, maskValues, maskUrl } from './secret-mask.ts'
+import { containsMask, MASK, maskArgs, maskValues, maskUrl } from './secret-mask.ts'
 
 /** One masked server view shipped to the client. */
 export interface McpServerRow {
@@ -73,7 +73,12 @@ function resolveMaskedPatch(patch: RowConfigPatch, raw: Record<string, unknown>)
   const out = { ...patch }
   const rawArgs = Array.isArray(raw.args) ? raw.args as string[] : undefined
   if (Array.isArray(out.args) && rawArgs !== undefined) {
-    out.args = out.args.map((value, index) => (value === MASK && rawArgs[index] !== undefined ? rawArgs[index] : value))
+    const maskedArgs = maskArgs(rawArgs)!
+    out.args = out.args.map((value, index) => {
+      if (value === maskedArgs[index] && rawArgs[index] !== undefined) return rawArgs[index]!
+      if (containsMask(value)) throw new BasicsError('bad-request', '修改含脱敏占位符的参数时，请填写完整参数值')
+      return value
+    })
   }
   const rawEnv = typeof raw.env === 'object' && raw.env !== null ? raw.env as Record<string, string> : undefined
   if (out.env !== null && out.env !== undefined && rawEnv !== undefined) {
@@ -83,8 +88,9 @@ function resolveMaskedPatch(patch: RowConfigPatch, raw: Record<string, unknown>)
     }
     out.env = env
   }
-  if (typeof out.url === 'string' && out.url.includes(MASK) && typeof raw.url === 'string') {
-    out.url = raw.url
+  if (typeof out.url === 'string' && typeof raw.url === 'string') {
+    if (out.url === maskUrl(raw.url)) out.url = raw.url
+    else if (containsMask(out.url)) throw new BasicsError('bad-request', '修改含脱敏占位符的地址时，请填写完整地址及凭据')
   }
   return out
 }

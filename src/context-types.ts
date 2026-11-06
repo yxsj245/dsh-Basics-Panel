@@ -1,11 +1,7 @@
 /**
- * Structural types for the cordis services this plugin consumes, plus the
- * Context augmentation both halves share. A third-party plugin resolves
- * outside the DSH monorepo's single cordis instance, so the upstream
- * `declare module 'cordis'` augmentations do not reach this Context — and the
- * npm cordis package does not declare the DSH-vendored runtime members
- * (`ctx.effect`, service properties). The members below mirror the actual
- * runtime shapes this plugin touches:
+ * 两端共用的宿主服务结构类型。Context 使用 DSH 官方的作用域 Cordis 包，
+ * 不再依赖独立的旧 npm cordis；这里只声明本插件实际消费的服务切面。
+ * 各切面由真实运行时契约测试验证，避免仅凭本地结构类型误报兼容：
  * - webServer: @deepseek-ai/dsh-host-webserver (the WebServer)
  * - sessions: host side @deepseek-ai/dsh-session (SessionStore), client side
  *   the runtime ISessions list feed
@@ -25,7 +21,7 @@
  * - locale: the client runtime locale service
  * Drift from upstream is contained to this file.
  *
- * 0.4.2 起要求 DSH >=0.2.1-rc.2 <0.3.0-0，宿主认证统一走 Connection。
+ * 0.4.3 起要求 DSH >=0.2.2-rc.1 <0.3.0-0，宿主认证统一走 Connection。
  * 公开服务使用面在 tests/dsh-runtime.spec.ts 对真实宿主验证；显式指定
  * DSH_RUNTIME_NODE_MODULES 后，服务缺失必须失败，不允许静默跳过。
  *
@@ -33,7 +29,7 @@
  * `Buffer`): it is part of the CLIENT-reachable declaration graph, so a Node
  * import here would leak into browser-only consumer builds.
  */
-import type { Context } from 'cordis'
+import type { Context } from '@deepseek-ai/cordis'
 
 /** The request face route handlers see (structural subset of node's IncomingMessage). */
 export interface BasicsHttpRequest {
@@ -270,6 +266,8 @@ export interface BasicsStoredSession {
   readonly eventCount?: number
   /** Physical artifact byte size, when the backend reports it cheaply. */
   readonly sizeBytes?: number
+  /** 宿主解析出的物化产物位置；未物化会话或非文件后端可以缺省。 */
+  readonly location?: { readonly kind: string; readonly path?: string }
 }
 
 /** The `ctx.sessionPersistence` face this plugin uses. */
@@ -344,7 +342,7 @@ export interface BasicsLocaleService {
   register(ns: string, locale: string, dict: Record<string, string>): () => void
 }
 
-declare module 'cordis' {
+declare module '@deepseek-ai/cordis' {
   interface Context {
     webServer: BasicsWebServer
     sessions: BasicsSessionStore & BasicsSessionsService
@@ -367,8 +365,6 @@ declare module 'cordis' {
     slots: BasicsSlotsService
     /** The client locale service (client side). */
     locale: BasicsLocaleService
-    /** Register a lifecycle callback (DSH-vendored cordis). */
-    effect(fn: () => void | (() => void), label?: string): void
   }
 }
 

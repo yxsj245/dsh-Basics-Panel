@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { Context } from 'cordis'
+import type { Context } from '../src/context-types.ts'
 import { registerArchived, type ArchivedList, type ArchivedMutation } from '../src/features/archived/archived-service.ts'
 import type { FeatureContext } from '../src/features/registry.ts'
 import { resolveBasicsConfig, type ResolvedBasicsConfig } from '../src/config.ts'
@@ -15,6 +15,12 @@ interface Snapshot {
   header: { id: string; cwd?: string; createdAt?: number }
   eventCount?: number
   sizeBytes?: number
+  location?: { kind: string; path?: string }
+}
+
+/** 与真实 JSONL 清单一致的物化位置，不读取真实用户会话。 */
+function jsonlLocation(id: string) {
+  return { kind: 'jsonl', path: join(root, '--proj--', id, 'session.jsonl.zstd') }
 }
 
 /** Build the fake host context the archived feature consumes. */
@@ -137,7 +143,7 @@ describe('archived.list', () => {
     const { api } = makeApi({
       archived: ['session-1', 'session-ghost'],
       snapshots: [
-        { header: { id: 'session-1', cwd: 'C:/proj', createdAt: 100 }, sizeBytes: 10, eventCount: 4 },
+        { header: { id: 'session-1', cwd: 'C:/proj', createdAt: 100 }, sizeBytes: 10, eventCount: 4, location: jsonlLocation('session-1') },
       ],
     })
     const result = await api['archived.list']()
@@ -157,7 +163,10 @@ describe('archived.list', () => {
   it('separates a loaded-but-idle session from a running one', async () => {
     const { api } = makeApi({
       archived: ['session-idle', 'session-busy'],
-      snapshots: [{ header: { id: 'session-idle' } }, { header: { id: 'session-busy' } }],
+      snapshots: [
+        { header: { id: 'session-idle' }, location: jsonlLocation('session-idle') },
+        { header: { id: 'session-busy' }, location: jsonlLocation('session-busy') },
+      ],
       loaded: ['session-idle', 'session-busy'],
       running: ['session-busy'],
     })
@@ -174,7 +183,7 @@ describe('archived.list', () => {
     // 未挂载 dsh-agent 的部署：拿不到 Agent，就不敢只凭内存判定「运行中」。
     const { api } = makeApi({
       archived: ['session-1'],
-      snapshots: [{ header: { id: 'session-1' } }],
+      snapshots: [{ header: { id: 'session-1' }, location: jsonlLocation('session-1') }],
       loaded: ['session-1'],
       agentsAbsent: true,
     })
@@ -187,7 +196,7 @@ describe('archived.list', () => {
     // 免得换成「status !== 'idle'」之类写法后，字段缺失也会被当成正在运行。
     const { ctx } = makeCtx({
       archived: ['session-1'],
-      snapshots: [{ header: { id: 'session-1' } }],
+      snapshots: [{ header: { id: 'session-1' }, location: jsonlLocation('session-1') }],
       loaded: ['session-1'],
     })
     const statusless = {
@@ -235,7 +244,7 @@ describe('archived.list', () => {
     await seedSession('session-1')
     const { api, presence } = makeApi({
       archived: ['session-1'],
-      snapshots: [{ header: { id: 'session-1', cwd: 'C:/proj', createdAt: 100 }, sizeBytes: 10, eventCount: 4 }],
+      snapshots: [{ header: { id: 'session-1', cwd: 'C:/proj', createdAt: 100 }, sizeBytes: 10, eventCount: 4, location: jsonlLocation('session-1') }],
       registryInitiallyAbsent: true,
     })
     const before = await api['archived.list']()
@@ -284,7 +293,7 @@ describe('archived.delete', () => {
     const directory = await seedSession('session-1', 12)
     const { api, holder, detached } = makeApi({
       archived: ['session-1', 'session-2'],
-      snapshots: [{ header: { id: 'session-1' }, sizeBytes: 12 }],
+      snapshots: [{ header: { id: 'session-1' }, sizeBytes: 12, location: jsonlLocation('session-1') }],
     })
     const result = await api['archived.delete']({ ids: ['session-1'] })
     expect(result.changed).toEqual(['session-1'])
@@ -309,7 +318,10 @@ describe('archived.delete', () => {
     const busyDirectory = await seedSession('session-busy', 8)
     const { api } = makeApi({
       archived: ['session-idle', 'session-busy'],
-      snapshots: [{ header: { id: 'session-idle' }, sizeBytes: 8 }, { header: { id: 'session-busy' }, sizeBytes: 8 }],
+      snapshots: [
+        { header: { id: 'session-idle' }, sizeBytes: 8, location: jsonlLocation('session-idle') },
+        { header: { id: 'session-busy' }, sizeBytes: 8, location: jsonlLocation('session-busy') },
+      ],
       loaded: ['session-idle', 'session-busy'],
       running: ['session-busy'],
     })
@@ -337,6 +349,83 @@ describe('archived.delete', () => {
     expect(result.skipped[0]?.reason).toContain('无法安全映射')
     // 归档记录保持原样，等待人工处置。
     expect(holder.archived).toEqual(['session~escaped'])
+  })
+
+  it('未物化会话和非 JSONL 后端保留归档记录', async () => {
+    const { api, holder, detached } = makeApi({
+      archived: ['session-pending', 'session-other-backend'],
+      snapshots: [
+        { header: { id: 'session-pending' } },
+        { header: { id: 'session-other-backend' }, location: { kind: 'custom', path: '/storage/session' } },
+      ],
+    })
+    expect((await api['archived.list']()).rows.every(row => !row.deletable)).toBe(true)
+    const result = await api['archived.delete']({ ids: ['session-pending', 'session-other-backend'] })
+    expect(result.changed).toEqual([])
+    expect(result.skipped).toHaveLength(2)
+    expect(holder.archived).toEqual(['session-pending', 'session-other-backend'])
+    expect(detached).toEqual([])
+  })
+
+  it('配置根缺失、目录布局无效或同名重复时不摘归档记录', async () => {
+    const invalid = join(root, '--proj--', 'session-invalid')
+    await mkdir(invalid, { recursive: true })
+    await writeFile(join(invalid, 'notes.txt'), 'keep')
+    const duplicate = await seedSession('session-duplicate')
+    const second = join(root, '--another--', 'session-duplicate')
+    await mkdir(second, { recursive: true })
+    await writeFile(join(second, 'session.jsonl'), 'keep')
+    const { api, holder, detached } = makeApi({
+      archived: ['session-invalid', 'session-duplicate'],
+      snapshots: [
+        { header: { id: 'session-invalid' }, location: jsonlLocation('session-invalid') },
+        { header: { id: 'session-duplicate' }, location: jsonlLocation('session-duplicate') },
+      ],
+    })
+    const result = await api['archived.delete']({ ids: ['session-invalid', 'session-duplicate'] })
+    expect(result.changed).toEqual([])
+    expect(result.skipped.map(row => row.reason)).toEqual([expect.stringContaining('布局无法验证'), expect.stringContaining('多个同名')])
+    expect(holder.archived).toHaveLength(2)
+    expect(detached).toEqual([])
+    expect((await stat(duplicate)).isDirectory()).toBe(true)
+    expect((await stat(second)).isDirectory()).toBe(true)
+
+    const missing = makeApi({ archived: ['session-ghost'], snapshots: [], config: { sessionsRoot: join(root, 'missing') } })
+    expect((await missing.api['archived.delete']({ ids: ['session-ghost'] })).changed).toEqual([])
+    expect(missing.holder.archived).toEqual(['session-ghost'])
+  })
+
+  it('宿主报告存在但目录缺失或位置不符时拒绝删除', async () => {
+    const directory = await seedSession('session-mismatch')
+    const { api, holder, detached } = makeApi({
+      archived: ['session-missing', 'session-mismatch'],
+      snapshots: [
+        { header: { id: 'session-missing' }, location: jsonlLocation('session-missing') },
+        { header: { id: 'session-mismatch' }, location: jsonlLocation('different-session') },
+      ],
+    })
+    const result = await api['archived.delete']({ ids: ['session-missing', 'session-mismatch'] })
+    expect(result.changed).toEqual([])
+    expect(result.skipped.map(row => row.reason)).toEqual([expect.stringContaining('未找到产物'), expect.stringContaining('位置不一致')])
+    expect(holder.archived).toHaveLength(2)
+    expect(detached).toEqual([])
+    expect((await stat(directory)).isDirectory()).toBe(true)
+  })
+
+  it('清单读取失败时即使绕过客户端直接调用也不能删除', async () => {
+    const directory = await seedSession('session-1')
+    const { ctx, holder, detached } = makeCtx({ archived: ['session-1'], snapshots: [] })
+    const failing = {
+      get: (name: string) => name === 'sessionPersistence'
+        ? { list: async () => { throw new Error('offline') } }
+        : (ctx.get as (key: string) => unknown)(name),
+      sessions: ctx.sessions,
+    } as unknown as Context
+    const api = registerArchived({ ctx: failing, resolved: resolveBasicsConfig({ sessionsRoot: root }), sessionCwdOf: () => root })
+    await expect(api['archived.delete']!({ ids: ['session-1'] })).rejects.toMatchObject({ code: 'archive-error', status: 503 })
+    expect(holder.archived).toEqual(['session-1'])
+    expect(detached).toEqual([])
+    expect((await stat(directory)).isDirectory()).toBe(true)
   })
 
   it('refuses when deletion is disabled by configuration', async () => {

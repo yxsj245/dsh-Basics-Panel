@@ -48,11 +48,8 @@ const NODE_BUILTINS = new Set([
  * DSH 0.1.2-alpha — its slots/sessions/locale services now come from the
  * standard web roster: ui-renderer / api-session-controller / client-locale).
  *
- * `cordis` is deliberately ABSENT: the shell seeds the table under the
- * scoped key `@deepseek-ai/cordis`, and a bare `cordis` require misses the
- * table at runtime. src/client only ever imports `Context` from bare `cordis`
- * (`import type`, erased), which is why the bundles currently require nothing
- * but react — the resolve guard below keeps it that way.
+ * 裸 `cordis` 不属于共享表；Context 统一从官方作用域包按类型导入。
+ * 构建守卫仍拒绝旧裸包，避免历史依赖重新混入浏览器。
  */
 const CLIENT_EXTERNALS = [
   'react',

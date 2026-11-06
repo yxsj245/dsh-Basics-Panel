@@ -4,15 +4,15 @@ DSH Web 插件「基础能力面板」：在 **设置 → 基础能力** 中可�
 
 ## 当前兼容版本
 
-**插件 0.4.2 要求 DSH `>=0.2.1-rc.2 <0.3.0-0`。** 本次实际核对与回归的宿主是 `0.2.1-rc.2`；范围内未来版本仍需复验，不代表预先认证。
+**插件 0.4.3 要求 DSH `>=0.2.2-rc.1 <0.3.0-0`、Node `>=24.9.0`。** 2026-11-06 核对当前安装与 npm `latest` 均为 `0.2.2-rc.1`；未来版本仍需复验。
 
-- 修复升级后四个页签的空 HTTP 405：旧插件等待已移除的 `webRuntime`，后端未挂载，请求落到静态页面 fallback。
-- 宿主注入改为 `webServer / connection / sessions / skills / tools`，所有管理请求先走公开的 `connection.admit()`：沿用宿主 Host/Origin 栅栏、浏览器登录 Cookie 和 API Peer 认证，并只允许 `owner` 身份。
-- 不提供免认证降级，不再维护旧的独立信任栅栏。401 提示重新登录；空 405 提示检查安装副本并重启。
-- 全局规则补齐 `$DSH_AGENTS_HOME/AGENTS.md`（默认 `~/.agents/AGENTS.md`），与 `$DSH_HOME/AGENTS.md` 一起发现；新建全局规则仍只写 DSH 根。
-- 四个 DSH 开发依赖对齐 `0.2.1-rc.2`，Cordis 对齐 `4.0.5`；两个插件清单版本同步为 `0.4.2`。
+- 开发依赖对齐 DSH `0.2.2-rc.1`、Cordis `4.1.0` 与 schemastery `3.19.0`；Context 使用官方 `@deepseek-ai/cordis`，移除旧裸 `cordis` 依赖。
+- 管理请求继续走 `connection.admit()`，继承 Host/Origin、Cookie/API 认证，只允许所有者；原有 HTTP 405 修复保留。
+- 适配新版未物化会话：归档删除必须核对宿主 JSONL `location` 和实际目录，清单读取失败、根目录错误、重复目录、链接或布局不明时保留归档记录。
+- MCP 展示补齐 `--token=value` 等号形式与 URL 敏感查询参数脱敏；原样保存会恢复原凭据，修改含占位符的地址需提供完整新值。
+- 真实宿主回归覆盖认证、JSONL 创建/物化以及两种客户端 bundle 在 SlotRegistry 中的注册与卸载。完整回归 14 文件、124 项通过，0 跳过。
 
-较早 DSH 请保留旧插件版本；0.4.1 之前的兼容记录不代表 0.4.2 继续支持旧宿主。详细操作见 [使用文档](<docs/使用文档.md>)；本轮证据与限制见 [0.2.1 兼容记录](<docs/dsh-0.2.1-compatibility.md>)。
+较早 DSH 请使用相应旧版插件。详细操作见 [使用文档](<docs/使用文档.md>)；本轮证据与边界见 [0.2.2 兼容记录](<docs/dsh-0.2.2-compatibility.md>)，历史 HTTP 405 根因见 [0.2.1 兼容记录](<docs/dsh-0.2.1-compatibility.md>)。
 
 ## 功能与范围
 
@@ -32,8 +32,8 @@ DSH Web 插件「基础能力面板」：在 **设置 → 基础能力** 中可�
 ```bash
 pnpm install
 pnpm typecheck
-pnpm test
 pnpm build
+pnpm test
 dsh plugin --profile web add file:<源码目录绝对路径>
 ```
 
@@ -52,8 +52,8 @@ pnpm run sync:check
 
 ```bash
 pnpm typecheck
-pnpm test
 pnpm build
+pnpm test
 ```
 
 真实宿主契约测试需要将 `DSH_RUNTIME_NODE_MODULES` 指向所测试 DSH 的 `node_modules`；未指定时该组明确跳过，指定无效路径或宿主缺少服务时必须失败。PowerShell 示例：

@@ -16,8 +16,8 @@
  *   (expected basename, inside the root, holds a generation log), so a miss or
  *   a shape change refuses instead of guessing.
  */
-import { readdir, rm, stat } from 'node:fs/promises'
-import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { lstat, readdir, realpath, rm, stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 /**
  * Canonical generation log names: `session.jsonl`, `session.jsonl.zstd`,
@@ -83,19 +83,29 @@ export async function describeSessionArtifact(
   if (!isSafeSessionId(sessionId)) return undefined
   if (basename(resolve(directory)) !== sessionId) return undefined
   if (!isInside(root, directory)) return undefined
-  let entries
+  // 只接受根目录下两级的真实目录；拒绝通过 junction/符号链接指向别处。
+  const parent = dirname(resolve(directory))
+  if (dirname(parent) !== resolve(root)) return undefined
+  let info
   try {
-    entries = await readdir(resolve(directory), { withFileTypes: true })
-  } catch {
-    return undefined
+    info = await lstat(directory)
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return undefined
+    throw new Error('无法读取会话目录，已保留会话及归档记录', { cause: error })
   }
+  if (!info.isDirectory() || info.isSymbolicLink() || (await lstat(parent)).isSymbolicLink()) {
+    throw new Error('会话产物不是受支持的真实目录，已拒绝删除')
+  }
+  if (!isInside(await realpath(root), await realpath(directory))) {
+    throw new Error('会话目录的实际位置不在配置根内，已拒绝删除')
+  }
+  const entries = await readdir(resolve(directory), { withFileTypes: true })
   const logs: string[] = []
   let bytes = 0
   for (const entry of entries) {
     if (!entry.isFile()) continue
     const path = join(resolve(directory), entry.name)
-    const info = await stat(path).catch(() => undefined)
-    if (info !== undefined) bytes += info.size
+    bytes += (await stat(path)).size
     if (isSessionLogName(entry.name)) logs.push(path)
   }
   if (logs.length === 0) return undefined
@@ -113,19 +123,29 @@ export async function describeSessionArtifact(
 export async function findSessionArtifact(root: string, sessionId: string): Promise<SessionArtifact | undefined> {
   if (!isSafeSessionId(sessionId)) return undefined
   const rootResolved = resolve(root)
-  let projectDirs
-  try {
-    projectDirs = (await readdir(rootResolved, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory())
-      .map(entry => entry.name)
-  } catch {
-    return undefined
+  // 根不可访问（包括不存在）无法证明会话不存在，错误必须向上传递。
+  const entries = await readdir(rootResolved, { withFileTypes: true })
+  let found: SessionArtifact | undefined
+  for (const project of entries) {
+    if (project.isSymbolicLink()) throw new Error('会话根内包含链接目录，无法完整核实产物，已拒绝删除')
+    if (!project.isDirectory()) continue
+    const directory = join(rootResolved, project.name, sessionId)
+    let candidate
+    try {
+      candidate = await lstat(directory)
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ENOENT') continue
+      throw new Error('无法核实会话产物，已保留归档记录', { cause: error })
+    }
+    if (!candidate.isDirectory() || candidate.isSymbolicLink()) {
+      throw new Error('会话路径不是受支持的真实目录，已拒绝删除')
+    }
+    const artifact = await describeSessionArtifact(rootResolved, sessionId, directory)
+    if (artifact === undefined) throw new Error('会话目录布局无法验证，已保留产物及归档记录')
+    if (found !== undefined) throw new Error('发现多个同名会话目录，无法唯一定位，已拒绝删除')
+    found = artifact
   }
-  for (const projectDir of projectDirs) {
-    const artifact = await describeSessionArtifact(rootResolved, sessionId, join(rootResolved, projectDir, sessionId))
-    if (artifact !== undefined) return artifact
-  }
-  return undefined
+  return found
 }
 
 /**
@@ -137,8 +157,8 @@ export async function findSessionArtifact(root: string, sessionId: string): Prom
  * @throws when the directory no longer passes the shape checks (never deletes blind).
  */
 export async function removeSessionArtifact(root: string, sessionId: string, directory: string): Promise<number> {
-  const fresh = await describeSessionArtifact(root, sessionId, directory)
-  if (fresh === undefined) {
+  const fresh = await findSessionArtifact(root, sessionId)
+  if (fresh === undefined || resolve(fresh.directory) !== resolve(directory)) {
     throw new Error('会话目录已失效或不是有效的会话产物，已跳过删除')
   }
   await rm(fresh.directory, { recursive: true, force: true })

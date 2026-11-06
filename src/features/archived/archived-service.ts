@@ -24,10 +24,10 @@
  * - `running` — the session's Agent exists and its status is `running`
  *   (dsh-agent's `AgentStatus`), i.e. a driver is actively draining turns.
  *   This is the same predicate the harness's own session list reports.
- * Delete blocks only on `running`: a loaded-but-idle session has no driver to
- * race, so removing its artifacts cannot interleave with a write in flight.
+ * 删除拒绝本进程正在运行的会话，并验证宿主物化位置与目录匹配。
+ * 空闲状态不能证明不存在存储句柄或其他进程写入租约，因此仍有文件级删除边界。
  */
-import { join, relative } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { dshHomeDisplay, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { FeatureContext } from '../registry.ts'
 import { BasicsError, requireStringList } from '../../wire.ts'
@@ -220,9 +220,10 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
         running,
         stored,
         restorable: !resolved.readOnly && writable,
-        // 悬空条目（磁盘上已无产物）同样可删——只清理归档记录；但列表整体读不到时不下判断。
-        // 只有「真的在跑回合」才拦住删除：装载但空闲的会话没有驱动在动，删产物不会和落盘交错。
-        deletable: !resolved.readOnly && resolved.allowSessionDelete && persisted !== undefined && !running,
+        // 列表仅提供候选资格；删除接口还要重新核实实际目录和宿主 location。
+        // 未物化或非 JSONL 的记录不可文件级删除，已确认缺失的条目可清理记账。
+        deletable: !resolved.readOnly && resolved.allowSessionDelete && writable && persisted !== undefined && !running
+          && (snapshot === undefined || (snapshot.location?.kind === 'jsonl' && typeof snapshot.location.path === 'string' && isAbsolute(snapshot.location.path))),
       }
     })
     rows.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
@@ -262,6 +263,11 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
       throw new BasicsError('forbidden', '当前部署已禁用归档会话删除（allowSessionDelete: false）', 403)
     }
     const ids = requireStringList(payload, 'ids', resolved.maxBatchIds)
+    if (!store.writable()) throw new BasicsError('archive-error', '归档记录当前不可写，已拒绝删除会话文件', 503)
+    const persisted = await storedSessions()
+    if (persisted === undefined) {
+      throw new BasicsError('archive-error', '无法读取持久化会话清单，已保留会话文件及归档记录', 503)
+    }
     const root = sessionsRoot()
     const archived = new Set(store.ids())
     // 本批 id 共用一个 Agent 注册表快照：批内所有行都按同一时刻的运行态判断。
@@ -279,22 +285,41 @@ export function registerArchived(fc: FeatureContext): Record<string, (payload: u
         skipped.push({ id, reason: '该会话正在运行（Agent 状态为 running），请先结束该回合再删除' })
         continue
       }
-      const artifact = await findSessionArtifact(root, id)
-      if (artifact === undefined) {
-        if (!isSafeSessionId(id)) {
-          // 需要转义的 id（上游会编码成 ~XXXX 目录名）：不猜目录，留给人工处理。
-          skipped.push({ id, reason: '会话 ID 无法安全映射到目录名，未做删除' })
-          continue
-        }
-        // 归档集合里的悬空条目：磁盘上已无产物，仅清理归档记录。
-        changed.push(id)
+      if (!isSafeSessionId(id)) {
+        skipped.push({ id, reason: '会话 ID 无法安全映射到目录名，未做删除' })
         continue
       }
       try {
+        const snapshot = persisted.get(id)
+        const location = snapshot?.location
+        // 新版宿主会列出尚未物化的会话；没有 location 绝不代表会话已消失。
+        if (snapshot !== undefined && (location?.kind !== 'jsonl' || typeof location.path !== 'string' || !isAbsolute(location.path))) {
+          skipped.push({ id, reason: '会话尚未物化或持久化后端不支持文件级删除，已保留归档记录' })
+          continue
+        }
+        const artifact = await findSessionArtifact(root, id)
+        if (artifact === undefined) {
+          if (snapshot !== undefined) {
+            skipped.push({ id, reason: '宿主仍记录此会话，但配置根内未找到产物，请核对 sessionsRoot，未做删除' })
+            continue
+          }
+          // 仅在宿主清单缺失且完整扫描成功无候选时，才确认是悬空记录。
+          changed.push(id)
+          continue
+        }
+        if (location?.path === undefined || !artifact.logs.some(log => resolve(log) === resolve(location.path!))) {
+          skipped.push({ id, reason: '实际产物与宿主持久化位置不一致，已保留文件及归档记录' })
+          continue
+        }
+        // 扫描期间 Agent 可能启动回合，删除前再次核实本进程运行态。
+        if (isRunning(agentsOf(), id)) {
+          skipped.push({ id, reason: '该会话正在运行，请先结束该回合再删除' })
+          continue
+        }
         freedBytes += await removeSessionArtifact(root, id, artifact.directory)
         changed.push(id)
       } catch (error) {
-        skipped.push({ id, reason: `删除失败：${messageOf(error)}` })
+        skipped.push({ id, reason: `删除失败，归档记录已保留：${messageOf(error)}` })
       }
     }
 

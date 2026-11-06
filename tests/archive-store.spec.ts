@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Context } from 'cordis'
+import type { Context } from '../src/context-types.ts'
 import { createArchiveStore } from '../src/features/archived/archive-store.ts'
 import { BasicsError } from '../src/wire.ts'
 
